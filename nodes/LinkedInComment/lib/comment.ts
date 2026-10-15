@@ -1,5 +1,5 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import { Flight, isObject } from '../../LinkedInFeed/lib/flight';
-import type { Data } from '../../LinkedInFeed/lib/flight';
 import { LinkedInFeedError, positiveInteger } from '../../LinkedInFeed/lib/types';
 import type { SessionCredentials } from '../../LinkedInFeed/lib/types';
 import { LinkedInSession } from '../../shared/session';
@@ -9,20 +9,16 @@ export const CREATE_COMMENT = 'com.linkedin.sdui.comments.createComment';
 const ENDPOINT = `https://www.linkedin.com/flagship-web/rsc-action/actions/server-request?sduiid=${CREATE_COMMENT}`;
 export const UNKNOWN_OUTCOME =
 	'LinkedIn did not confirm comment creation. The comment may already exist. Check the post before retrying.';
-const unsupported = () =>
-	new LinkedInFeedError(
-		'Could not find a supported comment form on this LinkedIn post. The post may be unavailable or comments disabled.',
-	);
 const namespace = 'MemoryNamespace';
 const bindings = [
-	['commentFieldBinding', 'stringValue'],
-	['richCommentFieldBinding', 'textModelForWrite'],
-	['linkPreviewIngestedContentId', 'stringValue'],
-	['externalImageUrl', 'stringValue'],
-	['externalImageId', 'stringValue'],
-	['lastPasteCharacterCount', 'intValue'],
-	['pasteToCreateDuration', 'expression'],
-	['hasEditsSinceLastPaste', 'expression'],
+	['commentFieldBinding', 'commentBoxText', 'stringValue'],
+	['richCommentFieldBinding', 'richCommentBoxText', 'textModelForWrite'],
+	['linkPreviewIngestedContentId', 'commentBoxLinkPreviewIngestedContentId', 'stringValue'],
+	['externalImageUrl', 'commentBoxExternalImageUrl', 'stringValue'],
+	['externalImageId', 'commentBoxExternalImageId', 'stringValue'],
+	['lastPasteCharacterCount', 'commentBoxLastPasteCharacterCount', 'intValue'],
+	['pasteToCreateDuration', 'commentBoxPasteToCreateDuration', 'expression'],
+	['hasEditsSinceLastPaste', 'commentBoxHasEditsSinceLastPaste', 'expression'],
 ] as const;
 
 export interface CommentOptions {
@@ -39,14 +35,18 @@ export interface CreatedComment {
 	postUrl: string;
 }
 
-export function commentOptions(postUrn: unknown, text: unknown, options: unknown): CommentOptions {
-	if (
-		typeof postUrn !== 'string' ||
-		!/^urn:li:(?:activity|share|ugcPost):[1-9]\d{0,19}$/.test(postUrn.trim())
-	)
+function activityIdFromUrn(value: unknown): string {
+	const match =
+		typeof value === 'string' ? /^urn:li:activity:([1-9]\d{0,19})$/.exec(value.trim()) : null;
+	if (!match)
 		throw new LinkedInFeedError(
-			'Post URN must be an activity, share, or ugcPost URN, for example urn:li:activity:123456789.',
+			'Post URN must be an activity URN, for example urn:li:activity:123456789. Use the urn returned by LinkedIn Feed; share and ugcPost IDs are different and cannot be substituted.',
 		);
+	return match[1];
+}
+
+export function commentOptions(postUrn: unknown, text: unknown, options: unknown): CommentOptions {
+	const activityId = activityIdFromUrn(postUrn);
 	if (
 		typeof text !== 'string' ||
 		!text.trim() ||
@@ -61,118 +61,50 @@ export function commentOptions(postUrn: unknown, text: unknown, options: unknown
 	if (!isObject(options))
 		throw new LinkedInFeedError('Options must be a collection of named settings.');
 	return {
-		postUrn: postUrn.trim(),
+		postUrn: `urn:li:activity:${activityId}`,
 		text,
-		timeout: positiveInteger(options.timeout ?? 25000, 'Request Timeout'),
+		timeout: positiveInteger(
+			options.timeout === undefined ? 25000 : options.timeout,
+			'Request Timeout',
+		),
 	};
 }
 
-/** Bounded traversal of data only. Never evaluates scripts, modules, or SDUI actions. */
-function objects(flight: Flight): Data[] {
-	const pending: unknown[] = [flight.root()];
-	const seen = new Set<object>();
-	const result: Data[] = [];
-	let steps = 0;
-	while (pending.length) {
-		if (++steps > 500000) throw unsupported();
-		const value = flight.resolve(pending.pop());
-		if (!value || typeof value !== 'object' || seen.has(value)) continue;
-		seen.add(value);
-		if (isObject(value)) result.push(value);
-		for (const child of Object.values(value)) pending.push(child);
-	}
-	return result;
-}
-
-export function commentTemplate(
-	bytes: Buffer,
-	postUrn: string,
-): { args: Data; activityId: string } {
-	if (bytes.length > 32 * 1024 * 1024) throw unsupported();
-	const html = bytes.toString('utf8');
-	const script = /<script\b[^>]*\bid=["']rehydrate-data["'][^>]*>([\s\S]*?)<\/script>/i.exec(
-		html,
-	)?.[1];
-	const assignment =
-		script && /^\s*window\.__como_rehydration__\s*=\s*([\s\S]*?)\s*;?\s*$/.exec(script)?.[1];
-	if (!assignment) throw unsupported();
-	let chunks: unknown;
-	try {
-		chunks = JSON.parse(assignment);
-	} catch {
-		throw unsupported();
-	}
-	if (!Array.isArray(chunks) || chunks.some((chunk) => typeof chunk !== 'string'))
-		throw unsupported();
-	const flight = new Flight(Buffer.from(chunks.join('')));
-	const candidates = new Map<string, { args: Data; activityId: string }>();
-	for (const object of objects(flight)) {
-		if (object.requestId !== CREATE_COMMENT) continue;
-		const args = flight.resolve(object.requestedArguments);
-		if (!isObject(args) || !isObject(args.payload)) continue;
-		const payload = args.payload;
-		const collection = payload.collection;
-		if (!isObject(collection) || !isObject(collection.threadUrn)) continue;
-		const thread = collection.threadUrn.threadUrnActivityThreadUrn;
-		const activityId =
-			isObject(thread) && isObject(thread.activityUrn) ? thread.activityUrn.activityId : undefined;
-		if (typeof activityId !== 'string' || !/^[1-9]\d{0,19}$/.test(activityId)) continue;
-		if (postUrn.startsWith('urn:li:activity:') && postUrn !== `urn:li:activity:${activityId}`)
-			continue;
-		if (
-			!isObject(collection.updateKey) ||
-			!Array.isArray(collection.updateKey.items) ||
-			collection.updateKey.items.length !== 1
-		)
-			continue;
-		const item = collection.updateKey.items[0];
-		const update =
-			isObject(item) && isObject(item.feedUpdateUrn)
-				? item.feedUpdateUrn.updateUrnActivityUrn
-				: undefined;
-		if (
-			!isObject(update) ||
-			!isObject(update.activityUrn) ||
-			update.activityUrn.activityId !== activityId
-		)
-			continue;
-		if (
-			typeof payload.optimisticKey !== 'string' ||
-			!payload.optimisticKey.startsWith('auto-component-')
-		)
-			continue;
-		for (const [name] of bindings) {
-			const binding = payload[name];
-			if (
-				!isObject(binding) ||
-				typeof binding.key !== 'string' ||
-				!binding.key ||
-				binding.namespace !== namespace
-			)
-				throw unsupported();
-		}
-		// Copy only the supported request data. Never execute callbacks supplied by the page.
-		const safeArgs = {
-			$type: 'proto.sdui.actions.requests.RequestedArguments',
-			requestedStateKeys: bindings.map(([name]) => ({
-				key: { value: { $case: 'id', id: (payload[name] as Data).key } },
-			})),
-			payload: Object.fromEntries(
-				['optimisticKey', 'collection', ...bindings.map(([name]) => name)].map((name) => [
-					name,
-					payload[name],
-				]),
-			),
-			requestMetadata: { $type: 'proto.sdui.common.RequestMetadata' },
-		};
-		candidates.set(JSON.stringify(safeArgs), { args: safeArgs, activityId });
-	}
-	if (candidates.size !== 1) throw unsupported();
-	return [...candidates.values()][0];
-}
-
-export function commentBody(args: Data, text: string, now = Date.now()): Data {
-	const payload = args.payload as Data;
+/** One self-contained SDUI POST, generated from the activity ID and plain text. */
+export function commentBody(activityId: string, text: string, now = Date.now()) {
+	if (!/^[1-9]\d{0,19}$/.test(activityId))
+		throw new LinkedInFeedError('Invalid LinkedIn activity ID.');
+	const stateId = `n8n-${randomUUID()}`;
+	const bindingValues = Object.fromEntries(
+		bindings.map(([name, prefix]) => [name, { key: `${prefix}-${stateId}`, namespace }]),
+	) as Record<(typeof bindings)[number][0], { key: string; namespace: string }>;
+	const payload = {
+		optimisticKey: `auto-component-${randomUUID()}`,
+		collection: {
+			updateKey: {
+				feedType: 3,
+				items: [
+					{
+						feedUpdateUrn: { updateUrnActivityUrn: { activityUrn: { activityId } } },
+						trackingId: randomBytes(16).toString('base64'),
+					},
+				],
+				aggregationType: 0,
+				aggregationReasonTypes: [],
+				isVideoCarousel: false,
+			},
+			threadUrn: { threadUrnActivityThreadUrn: { activityUrn: { activityId } } },
+		},
+		...bindingValues,
+	};
+	const args = {
+		$type: 'proto.sdui.actions.requests.RequestedArguments',
+		requestedStateKeys: bindings.map(([name]) => ({
+			key: { value: { $case: 'id', id: payload[name].key } },
+		})),
+		payload,
+		requestMetadata: { $type: 'proto.sdui.common.RequestMetadata' },
+	};
 	const values: unknown[] = [
 		text,
 		{ text, attribute: [], $type: 'TextModel', source: 'local' },
@@ -183,8 +115,8 @@ export function commentBody(args: Data, text: string, now = Date.now()): Data {
 		{ type: 'bigint', value: String(now) },
 		false,
 	];
-	const states = bindings.map(([name, originalProtoCase], index) => {
-		const key = (payload[name] as Data).key;
+	const states = bindings.map(([name, , originalProtoCase], index) => {
+		const key = payload[name].key;
 		return {
 			key,
 			namespace,
@@ -245,20 +177,11 @@ export function createdComment(
 	return { commentUrn, commentId };
 }
 
-function responseBody(response: unknown, write: boolean): Buffer {
-	const fail = () =>
-		new LinkedInFeedError(
-			write
-				? UNKNOWN_OUTCOME
-				: 'Could not load the LinkedIn post. Check connectivity, the URN, and session credentials.',
-		);
+function responseBody(response: unknown): Buffer {
+	const fail = () => new LinkedInFeedError(UNKNOWN_OUTCOME);
 	if (!isObject(response) || !Number.isInteger(response.statusCode) || !isObject(response.headers))
 		throw fail();
 	const status = response.statusCode as number;
-	if (status === 401 || status === 403 || (status >= 300 && status < 400))
-		throw new LinkedInFeedError(
-			'LinkedIn requires sign-in or session verification. Update the session credential with fresh cookies.',
-		);
 	if (status < 200 || status >= 300) throw fail();
 	const body = response.body;
 	if (!Buffer.isBuffer(body) && typeof body !== 'string' && !(body instanceof Uint8Array))
@@ -273,25 +196,17 @@ export async function postComment(
 	signal?: AbortSignal,
 ): Promise<CreatedComment> {
 	// Constructing a session validates credentials before any request or write begins.
+	const activityId = activityIdFromUrn(options.postUrn);
 	const session = new LinkedInSession(http, credentials);
 	const postUrl = `https://www.linkedin.com/feed/update/${options.postUrn}/`;
-	let page: unknown;
-	try {
-		page = await session.request(postUrl, 'GET', options.timeout, signal);
-	} catch {
-		throw new LinkedInFeedError(
-			'Could not load the LinkedIn post. Check connectivity and session credentials.',
-		);
-	}
-	const { args, activityId } = commentTemplate(responseBody(page, false), options.postUrn);
 	if (signal?.aborted)
 		throw new LinkedInFeedError('LinkedIn comment creation was cancelled before submission.');
-	const body = commentBody(args, options.text);
+	const body = commentBody(activityId, options.text);
 	let result: ReturnType<typeof createdComment>;
 	try {
 		const response = await session.request(ENDPOINT, 'POST', options.timeout, signal, body);
 		if (signal?.aborted) throw new LinkedInFeedError(UNKNOWN_OUTCOME);
-		result = createdComment(responseBody(response, true), activityId);
+		result = createdComment(responseBody(response), activityId);
 	} catch {
 		throw new LinkedInFeedError(UNKNOWN_OUTCOME);
 	}

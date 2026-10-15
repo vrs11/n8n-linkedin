@@ -45,7 +45,7 @@ export class LinkedInSession {
 	}
 	async request(
 		url: string,
-		method: 'GET' | 'POST',
+		method: 'POST',
 		timeout: number,
 		signal?: AbortSignal,
 		body?: unknown,
@@ -65,9 +65,8 @@ export class LinkedInSession {
 			abortSignal: signal,
 			...(body === undefined ? {} : { body: JSON.stringify(body) }),
 			headers: {
-				...(method === 'GET'
-					? { Accept: 'text/html' }
-					: { 'Content-Type': 'application/json', 'x-li-rsc-stream': 'true' }),
+				'Content-Type': 'application/json',
+				'x-li-rsc-stream': 'true',
 				'csrf-token': csrf,
 				Referer: 'https://www.linkedin.com/feed/',
 				'User-Agent': this.userAgent,

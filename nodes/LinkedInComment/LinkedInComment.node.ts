@@ -53,7 +53,7 @@ export class LinkedInComment implements INodeType {
 				required: true,
 				default: '',
 				placeholder: 'urn:li:activity:123456789',
-				description: 'URN of the post to comment on. Accepts activity, share, or ugcPost URNs.',
+				description: 'Activity URN of the post to comment on, as returned by LinkedIn Feed',
 				hint: 'Use the urn returned by LinkedIn Feed. For AI tools, define this parameter with type string.',
 			},
 			{

@@ -143,7 +143,7 @@ The installed package includes compiled node code, credential code, the icon, th
 
 ## Create a comment
 
-Add **LinkedIn Comment**, select your existing **LinkedIn Session API** credential, and configure **Post URN** and **Comment Text**. Post URN accepts `urn:li:activity:…`, `urn:li:share:…`, and `urn:li:ugcPost:…`. Use the `urn` returned by LinkedIn Feed directly. The node loads the supplied post to resolve its activity thread and current comment form; it never assumes share and activity IDs are interchangeable.
+Add **LinkedIn Comment**, select your existing **LinkedIn Session API** credential, and configure **Post URN** and **Comment Text**. Post URN accepts `urn:li:activity:…`. Use the `urn` returned by LinkedIn Feed directly. Each input item makes exactly one authenticated HTTP POST, with its payload built from the activity ID and text. Share and ugcPost IDs are different from activity IDs and are rejected before any request; obtain the activity URN from LinkedIn Feed.
 
 Both fields support expressions. The [workflow example](examples/create-comment.json) uses `={{ $json.urn }}` and `={{ $json.comment }}` from an upstream item. It creates one comment per input item and pairs each result with its input. Plain text and line breaks are preserved; rich mentions, media attachments, and replies to other comments are not supported.
 
@@ -160,4 +160,4 @@ A successful result contains `postUrn`, resolved `activityUrn`, `commentUrn`, `c
 
 Comment submissions are sent **once**, without automatic retries. A timeout, HTTP 500, cancellation during submission, or malformed response can occur after LinkedIn has already created the comment. Such errors tell you to check the post before retrying. n8n's **Retry On Fail**, manual workflow reruns, and repeated agent calls can still create duplicates; these are separate invocations. Continue On Fail returns a paired error for the affected item; cancellation stops the execution.
 
-This uses LinkedIn's browser session/SDUI protocol. The node reads the post's request template as data and submits only the supported comment fields; it does not execute page scripts or UI callbacks. The protocol can change, and inaccessible posts or disabled comments fail before submission when no supported form is available. Rebuild, reinstall the package copy if applicable, and restart n8n and its workers to load the new node.
+This uses LinkedIn's browser session/SDUI HTTP endpoint. The node generates the complete JSON request locally, including independent state and tracking IDs for each invocation. It does not fetch post pages, inspect forms, or require a browser. The server response supplies the created comment URN; unavailable posts and disabled comments are handled through that response. The protocol can change. Rebuild, reinstall the package copy if applicable, and restart n8n and its workers to load the new node.

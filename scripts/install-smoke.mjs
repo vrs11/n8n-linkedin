@@ -102,12 +102,11 @@ try {
 		},
 		evalLlmMockHandler: async (options) => {
 			requests++;
-			if (options.method === 'GET')
-				return {
-					statusCode: 200,
-					headers: { 'content-type': 'text/html' },
-					body: readFileSync(new URL('../tests/fixtures/comment-page.html', import.meta.url)),
-				};
+			assert.equal(
+				options.method,
+				'POST',
+				'LinkedIn nodes must only send their direct POST requests',
+			);
 			if (options.url.includes('comments.createComment')) {
 				assert.equal(JSON.parse(options.body).states[0].value, 'Fixture comment');
 				return {
@@ -445,9 +444,10 @@ try {
 			const run = freshRun();
 			const data = {
 				node: workflow.getNode('Comment'),
-				data: { main: [[{ json: { urn: 'urn:li:share:202', comment: 'Fixture comment' } }]] },
+				data: { main: [[{ json: { urn: 'urn:li:activity:101', comment: 'Fixture comment' } }]] },
 				source: { main: [null] },
 			};
+			const beforeCommentRequests = requests;
 			const result = await new WorkflowExecute(additionalData, mode, run).runNode(
 				workflow,
 				data,
@@ -456,8 +456,13 @@ try {
 				additionalData,
 				mode,
 			);
+			assert.equal(
+				requests - beforeCommentRequests,
+				1,
+				'One comment must use exactly one HTTP request',
+			);
 			assert.equal(result.data[0][0].json.commentUrn, 'urn:li:comment:(activity:101,999)');
-			assert.equal(result.data[0][0].json.postUrn, 'urn:li:share:202');
+			assert.equal(result.data[0][0].json.postUrn, 'urn:li:activity:101');
 			assert.deepEqual(result.data[0][0].pairedItem, { item: 0 });
 			commentCompatibilityCases++;
 		}

@@ -23,11 +23,14 @@ export interface CardOptions {
 	company?: boolean;
 	text?: string;
 	image?: boolean;
+	authorUrl?: string;
 }
 
 export function card(options: CardOptions): unknown {
 	const id = options.id;
-	const actorUrl = `https://www.linkedin.com/${options.company ? 'company/example-company' : 'in/example-person'}/`;
+	const actorUrl =
+		options.authorUrl ??
+		`https://www.linkedin.com/${options.company ? 'company/example-company' : 'in/example-person'}/`;
 	const navigate = {
 		$type: 'proto.sdui.actions.core.NavigateToUrl',
 		urlValue: { $case: 'url', url: actorUrl },

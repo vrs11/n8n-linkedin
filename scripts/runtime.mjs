@@ -16,6 +16,9 @@ export function runtime() {
 	const { PackageDirectoryLoader } = require(
 		resolve(coreRoot, 'dist/nodes-loader/package-directory-loader.js'),
 	);
+	const { CustomDirectoryLoader } = require(
+		resolve(coreRoot, 'dist/nodes-loader/custom-directory-loader.js'),
+	);
 	const { getRequestHelperFunctions } = require(
 		resolve(
 			coreRoot,
@@ -23,7 +26,41 @@ export function runtime() {
 		),
 	);
 	const version = require('n8n/package.json').version;
+	const { createNodeAsTool } = require(
+		resolve(coreRoot, 'dist/execution-engine/node-execution-context/utils/create-node-as-tool.js'),
+	);
+	const { makeHandleToolInvocation } = require(
+		resolve(
+			coreRoot,
+			'dist/execution-engine/node-execution-context/utils/get-input-connection-data.js',
+		),
+	);
+	const { SupplyDataContext } = require(
+		resolve(coreRoot, 'dist/execution-engine/node-execution-context/supply-data-context.js'),
+	);
+	const { convertNodeToAiTool } = require(
+		resolve(require.resolve('n8n/package.json'), '..', 'dist/tool-generation/ai-tools.js'),
+	);
 	const { WorkflowExecute } = require('n8n-core');
-	const { Workflow } = require('n8n-workflow');
-	return { PackageDirectoryLoader, getRequestHelperFunctions, WorkflowExecute, Workflow, version };
+	const { Workflow, NodeHelpers } = require('n8n-workflow');
+	const { getParametersJsonSchema } = require('@n8n/ai-utilities');
+	const langchainRoot = resolve(require.resolve('@n8n/n8n-nodes-langchain/package.json'), '..');
+	const { getConnectedTools } = require(resolve(langchainRoot, 'dist/utils/helpers.js'));
+	const { zodToDraft202012 } = require('@n8n/ai-utilities/json-schema');
+	return {
+		PackageDirectoryLoader,
+		CustomDirectoryLoader,
+		getRequestHelperFunctions,
+		WorkflowExecute,
+		Workflow,
+		NodeHelpers,
+		version,
+		createNodeAsTool,
+		convertNodeToAiTool,
+		makeHandleToolInvocation,
+		SupplyDataContext,
+		getConnectedTools,
+		getParametersJsonSchema,
+		zodToDraft202012,
+	};
 }

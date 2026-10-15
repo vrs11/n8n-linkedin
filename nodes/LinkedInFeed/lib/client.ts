@@ -3,6 +3,7 @@ import type { IHttpRequestOptions } from 'n8n-workflow';
 import { setTimeout as wait } from 'node:timers/promises';
 import { isObject } from './flight';
 import { parseFeedPage } from './parser';
+import { authorType } from './profiles';
 import { LinkedInFeedError, validateOptions } from './types';
 import type {
 	CollectionOptions,
@@ -117,9 +118,11 @@ export class LinkedInClient {
 				}
 			});
 		const liAt = credential(credentials.liAt, 'li_at');
-		const session = credential(credentials.jsessionId, 'JSESSIONID').replace(/^"|"$/g, '');
+		const rawSession = credential(credentials.jsessionId, 'JSESSIONID');
+		const session =
+			rawSession.startsWith('"') && rawSession.endsWith('"') ? rawSession.slice(1, -1) : rawSession;
 		this.userAgent = credential(credentials.userAgent, 'User-Agent');
-		if (/[;"\\\s]/.test(liAt) || /[;"\\\s]/.test(session)) {
+		if (!session || /[;"\\\s]/.test(liAt) || /[;"\\\s]/.test(session)) {
 			throw new LinkedInFeedError(
 				'Paste cookie values only, without Cookie header names or separators.',
 			);
@@ -194,9 +197,14 @@ export class LinkedInClient {
 					'LinkedIn request failed or timed out. Check connectivity and retry.',
 				);
 			}
+			if (this.signal?.aborted)
+				throw new LinkedInFeedError('LinkedIn feed retrieval was cancelled.');
 			if (
 				!isObject(response) ||
 				typeof response.statusCode !== 'number' ||
+				!Number.isInteger(response.statusCode) ||
+				response.statusCode < 100 ||
+				response.statusCode > 599 ||
 				!isObject(response.headers)
 			) {
 				throw new LinkedInFeedError('Unexpected HTTP response from LinkedIn.');
@@ -272,6 +280,8 @@ export async function collectPosts(
 		const result = await client.page(payload);
 		assertActive();
 		for (const post of result.posts) {
+			// Use the parsed author link, never company mentions or follower counts in post text.
+			if (options.excludeCompanies && authorType(post.author.url) !== 'person') continue;
 			const identity = post.urn || post.url;
 			if (identities.has(identity)) continue;
 			identities.add(identity);

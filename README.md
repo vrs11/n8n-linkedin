@@ -22,6 +22,8 @@ npm install --prefix ~/.n8n/nodes --omit=dev --ignore-scripts --install-links /a
 
 Restart n8n. Your instance must allow community packages. If you configured a custom n8n user directory, use its `nodes` directory instead. Queue-mode workers need the same package installed.
 
+For a deployment using custom extensions instead of package installation, set `N8N_CUSTOM_EXTENSIONS=/absolute/path/on/server/n8n-linkedin/dist` in the n8n service environment after building. Keep the project's installed runtime dependencies available alongside that `dist` directory. Restart n8n and its workers after updating. This loading mode registers the node as `CUSTOM.linkedInFeed` and its generated tool as `CUSTOM.linkedInFeedTool`; package installation uses the `n8n-nodes-linkedin-feed` prefix. Existing workflows must reference the type prefix used by their deployment.
+
 `--install-links` installs a copy of the built package instead of a symlink to the source directory. `--ignore-scripts` skips installation hooks because you already built the node.
 
 For an existing Docker container named `n8n` with `/home/node/.n8n` persisted, run the build above on your server, then copy the compiled output and package manifest into the container:
@@ -52,16 +54,45 @@ Add **LinkedIn Feed**, select **Get Posts**, select your credential, and set **L
 
 Import [the example workflow](examples/get-feed.json) and select your credential before execution.
 
-Each incoming item starts a new recent-first collection. Each returned post links back to its corresponding input item through `pairedItem`. Sponsored cards and non-post upsells are excluded; organic company posts remain eligible. Duplicate post URNs are removed while preserving feed order.
+To use the node with an **AI Agent**, click **+** under the agent's **Tools** connector, search for **LinkedIn Feed**, and select **LinkedIn Feed Tool**. Configure its session credential and Limit. n8n generates this separate tool variant from the node's `usableAsTool` setting; the regular **LinkedIn Feed** node already on the canvas has a normal workflow output and cannot connect to the Tools connector. After installing or updating the node, restart n8n and reload the editor before adding the tool.
 
-| Option               | Default | Behavior                                                   |
-| -------------------- | ------- | ---------------------------------------------------------- |
-| Limit                | 20      | Positive safe integer; requested unique organic posts      |
-| Maximum Pages        | 100     | Fails when reached while additional posts are still needed |
-| Maximum Retries      | 2       | Retries per page; configurable from 0 to 10                |
-| Request Timeout (Ms) | 25000   | Timeout for each HTTP request                              |
+To let the agent choose the number of posts, set the tool's **Limit** to **Expression** and enter:
 
-The node returns fewer than Limit when LinkedIn exhausts the feed. An empty exhausted feed returns no items. Network, authentication, parsing, and page-limit failures fail the node; enabling **Continue On Fail** returns a paired item containing a sanitized `error` string.
+```text
+{{ $fromAI('limit', 'Number of posts to retrieve; a positive whole number', 'number') }}
+```
+
+This exposes a numeric tool argument: the agent calls the tool with `{"limit":5}`. The explicit `'number'` type matters because `$fromAI()` defaults to string. A fixed Limit such as `20` stays node configuration and exposes no limit argument to the agent. Tool descriptions alone do not define the input schema. See [n8n's tool parameter documentation](https://docs.n8n.io/advanced-ai/examples/using-the-fromai-function/).
+
+Argument names are case-sensitive: `$fromAI('Limit', '', 'number')` expects `{"Limit":5}`, while the expression above expects `{"limit":5}`. After changing the expression, rerun the AI Agent so it receives the new schema. Re-executing only the tool step can reuse an earlier tool input.
+
+If **From AI** shows a string field named `input` while the expression expects a numeric `limit`, check the connected chat model's tool-schema conversion. A custom model adapter can lose the structured schema when separate copies of Zod are installed. This can leave Calculator working (it accepts a text input) while this node fails because `$fromAI('limit', ...)` resolves to `undefined`. Changing the tool description or upgrading n8n alone does not repair that adapter conversion. The node's default Limit is the fixed number `20`; n8n saves a `$fromAI()` expression when you enable model-defined input.
+
+The [tool example](examples/get-feed-as-tool.json) contains this configuration. Import it, select your LinkedIn credential, and connect its output to an existing AI Agent's **Tools** connector. The example contains only the tool node, so you can use your existing agent and model. Its manual tool description explains the numeric input and available output fields. For an existing tool with **Tool Description → Set Automatically**, switch to **Set Manually** to edit its description. Exact publication timestamps remain unavailable; posts include the publication label supplied by LinkedIn.
+
+New tool instances default to **Set Manually** with a description of the available data and input requirements. Existing workflows that saved **Set Automatically** retain that choice and can switch modes in the editor. Limit still defaults to the fixed number `20`.
+
+| Connection                               | Node to use        | Behavior                                                                                                        |
+| ---------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Ordinary workflow and sub-workflow steps | LinkedIn Feed      | Main input/output; evaluates Limit and Options for each input item and pairs returned posts with that input     |
+| AI Agent Tools                           | LinkedIn Feed Tool | `ai_tool` output; fixed configuration or typed `$fromAI()` arguments; independent state for each invocation     |
+| MCP Server Trigger Tools                 | LinkedIn Feed Tool | Uses n8n's tool contract and MCP schema conversion; n8n manages the MCP endpoint, authentication, and transport |
+
+Chat-model adapters must preserve the tool's schema when advertising it to their model. The integration checks validate n8n's native tool registration, AI SDK schema conversion, and MCP schema serialization with fixture responses; they do not run external models or a live MCP server.
+
+For people-only posts, add **Options → Exclude Companies** and enable it. The node identifies personal profiles from the post author's LinkedIn profile URL, skips company and unidentified authors, and keeps paginating until it reaches Limit or the feed ends. Company mentions in a person's post do not exclude that post. This option is also available on **LinkedIn Feed Tool**.
+
+Each incoming item starts a new recent-first collection. Each returned post links back to its corresponding input item through `pairedItem`. Sponsored cards and non-post upsells are excluded; organic company posts remain eligible by default. Duplicate post URNs are removed while preserving feed order.
+
+| Option               | Default | Behavior                                                           |
+| -------------------- | ------- | ------------------------------------------------------------------ |
+| Limit                | 20      | Positive safe integer; requested unique organic posts              |
+| Exclude Companies    | false   | Return only identifiable people posts; Limit counts matching posts |
+| Maximum Pages        | 100     | Fails when reached while additional posts are still needed         |
+| Maximum Retries      | 2       | Retries per page; configurable from 0 to 10                        |
+| Request Timeout (Ms) | 25000   | Timeout for each HTTP request                                      |
+
+The node returns fewer than Limit when LinkedIn exhausts the feed. An empty exhausted feed returns no items. Parameters must resolve to numeric integers and booleans as appropriate; strings and null settings are rejected before loading credentials or requesting posts. Network, authentication, parsing, and page-limit failures fail the node by default. n8n's **On Error** settings can continue through the regular or error output with paired, sanitized errors; legacy **Continue On Fail** is also supported. Execution cancellation always stops the collection, including when error continuation is enabled.
 
 Transient connection failures and HTTP `429`, `502`, `503`, and `504` use bounded retries. `Retry-After` is respected. A page has a cumulative retry-wait budget of 60 seconds; longer waits fail with the minimum retry delay so the workflow can be scheduled later.
 
@@ -97,7 +128,7 @@ npm run build
 npm run dev
 ```
 
-Tests cover byte framing and references, extraction and filtering, initial bindings, pagination, cookie rotation, retries, sanitized errors, and n8n input/output pairing. Fixtures use fabricated identifiers and content derived from observed protocol shapes.
+Tests cover byte framing and references, bounded text expansion, extraction and filtering, localized author profiles, precise post IDs, initial bindings, pagination, cookie rotation, retries, sanitized errors, parameter validation, cancellation, and n8n input/output pairing. Fixtures use fabricated identifiers and content derived from observed protocol shapes.
 
 For integration checks, set `N8N_RUNTIME_DIR` to a directory containing an installed n8n 2.43.5 package, or run with n8n installed in this project's `node_modules`:
 
@@ -106,6 +137,6 @@ N8N_RUNTIME_DIR=/path/to/n8n-runtime npm run test:install
 N8N_RUNTIME_DIR=/path/to/n8n-runtime npm run test:live -- --env-file investigation/linkedin-http/.env --limit 20
 ```
 
-The installation check installs the built node directly from the source directory into a temporary directory and uses n8n's package loader and execution engine with a fixture response. Both checks isolate n8n settings in temporary folders and clean them up. The opt-in live check uses the n8n package loader and HTTP helper to retrieve the requested count with your supplied session. It reports counts only and does not persist credentials or post contents. You can alternatively provide `LI_AT`, `JSESSIONID`, and `LINKEDIN_USER_AGENT` as environment variables.
+The installation check installs the built node directly from the source directory into a temporary directory and exercises n8n's package and custom-directory loaders. Native engine checks cover manual, triggered, and integrated execution, per-item expressions, fixed and dynamic tool parameters, concurrent calls, empty results, authentication failures, tool-description defaults and migration, AI SDK conversion, and MCP schema serialization. Both checks isolate n8n settings in temporary folders and clean them up. The opt-in live check uses the n8n package loader and HTTP helper to retrieve the requested count with your supplied session. It reports counts only and does not persist credentials or post contents. You can alternatively provide `LI_AT`, `JSESSIONID`, and `LINKEDIN_USER_AGENT` as environment variables.
 
 The installed package includes compiled node code, credential code, the icon, this README, and the example workflow. Investigation files, tests, development scripts, and credentials are excluded. This is an internal, unlicensed package; the lint configuration retains n8n checks with narrowly documented exceptions for private-package metadata, the cookie dependency, and domain-error boundaries.

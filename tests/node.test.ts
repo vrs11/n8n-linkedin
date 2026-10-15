@@ -2,16 +2,16 @@ import type { IExecuteFunctions, ICredentialTestFunctions } from 'n8n-workflow';
 import { describe, expect, it, vi } from 'vitest';
 import { LinkedInFeed } from '../nodes/LinkedInFeed/LinkedInFeed.node';
 import { LinkedInSessionApi } from '../credentials/LinkedInSessionApi.credentials';
-import { credentials, fixture, response } from './fixtures';
+import { card, credentials, fixture, response } from './fixtures';
 
-function context(limits = [1], continueOnFail = false) {
+function context(limits: unknown[] = [1], continueOnFail = false, options: unknown = {}) {
 	return {
 		getInputData: () => limits.map(() => ({ json: {} })),
 		getNodeParameter: vi.fn((name: string, index: number) =>
-			name === 'limit' ? limits[index] : name === 'operation' ? 'getPosts' : {},
+			name === 'limit' ? limits[index] : name === 'operation' ? 'getPosts' : options,
 		),
 		getCredentials: vi.fn().mockResolvedValue(credentials),
-		getExecutionCancelSignal: () => undefined,
+		getExecutionCancelSignal: vi.fn<() => AbortSignal | undefined>(() => undefined),
 		getNode: () => ({
 			name: 'LinkedIn Feed',
 			type: 'n8n-nodes-linkedin-feed.linkedInFeed',
@@ -25,6 +25,97 @@ function context(limits = [1], continueOnFail = false) {
 }
 
 describe('n8n adapter', () => {
+	it('does not fetch credentials or posts for an empty input', async () => {
+		const ctx = context([]);
+		expect(await new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions)).toEqual([
+			[],
+		]);
+		expect(ctx.getCredentials).not.toHaveBeenCalled();
+		expect(ctx.helpers.httpRequest).not.toHaveBeenCalled();
+	});
+
+	it('validates parameters before loading credentials', async () => {
+		const ctx = context([undefined]);
+		await expect(
+			new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions),
+		).rejects.toThrow('Limit is missing');
+		expect(ctx.getCredentials).not.toHaveBeenCalled();
+		expect(ctx.helpers.httpRequest).not.toHaveBeenCalled();
+	});
+
+	it.each([null, [], false, 'settings'])(
+		'reports malformed Options without touching credentials (%j)',
+		async (options) => {
+			const ctx = context([1], false, options);
+			await expect(
+				new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions),
+			).rejects.toThrow('Options must be a collection');
+			expect(ctx.getCredentials).not.toHaveBeenCalled();
+		},
+	);
+
+	it('distinguishes expression failures from credential failures without leaking their values', async () => {
+		const ctx = context();
+		ctx.getNodeParameter.mockImplementation(() => {
+			throw new Error('test-session-secret');
+		});
+		await expect(
+			new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions),
+		).rejects.toThrow('Could not evaluate LinkedIn Feed parameters');
+		expect(ctx.getCredentials).not.toHaveBeenCalled();
+		const credentialsCtx = context();
+		credentialsCtx.getCredentials.mockRejectedValue(new Error('test-session-secret'));
+		await expect(
+			new LinkedInFeed().execute.call(credentialsCtx as unknown as IExecuteFunctions),
+		).rejects.toThrow('Could not load LinkedIn session credentials');
+		expect(credentialsCtx.helpers.httpRequest).not.toHaveBeenCalled();
+	});
+
+	it.each([false, true])(
+		'propagates cancellation without continuing to the next input (continueOnFail=%s)',
+		async (continueOnFail) => {
+			const controller = new AbortController();
+			const ctx = context([1, 1], continueOnFail);
+			ctx.getExecutionCancelSignal.mockReturnValue(controller.signal);
+			ctx.helpers.httpRequest.mockImplementation(async () => {
+				controller.abort();
+				return response();
+			});
+			await expect(
+				new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions),
+			).rejects.toMatchObject({
+				message: 'LinkedIn feed retrieval was cancelled.',
+				context: { itemIndex: 0 },
+			});
+			expect(ctx.getCredentials).toHaveBeenCalledTimes(1);
+			expect(ctx.helpers.httpRequest).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it('does not start an HTTP request when cancelled during credential resolution', async () => {
+		const controller = new AbortController();
+		const ctx = context([1], true);
+		ctx.getExecutionCancelSignal.mockReturnValue(controller.signal);
+		ctx.getCredentials.mockImplementation(async () => {
+			controller.abort();
+			return credentials;
+		});
+		await expect(
+			new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions),
+		).rejects.toThrow('cancelled');
+		expect(ctx.helpers.httpRequest).not.toHaveBeenCalled();
+	});
+
+	it('applies the configured company filter before reaching Limit', async () => {
+		const ctx = context([1], false, { excludeCompanies: true });
+		ctx.helpers.httpRequest.mockResolvedValue(
+			response(fixture([card({ id: '100', company: true }), card({ id: '101' })], null)),
+		);
+		const [items] = await new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions);
+		expect(items.map((item) => item.json.urn)).toEqual(['urn:li:activity:101']);
+		expect(items[0].pairedItem).toEqual({ item: 0 });
+	});
+
 	it('evaluates limits for each input, starts fresh collections, and pairs output items', async () => {
 		const ctx = context([1, 2]);
 		const [items] = await new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions);

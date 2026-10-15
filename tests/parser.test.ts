@@ -4,6 +4,54 @@ import { parseFeedPage } from '../nodes/LinkedInFeed/lib/parser';
 import { card, element, fixture, nextPayload, tracked } from './fixtures';
 
 describe('feed extraction', () => {
+	it.each([
+		'https://uk.linkedin.com/in/example-person/',
+		'https://linkedin.com/in/example-person/',
+		'https://www.linkedin.com/school/example-school/',
+		'https://www.linkedin.com/showcase/example-showcase/',
+	])('retains recognized author profiles (%s)', (authorUrl) => {
+		expect(parseFeedPage(fixture([card({ id: '101', authorUrl })], null)).posts[0].author.url).toBe(
+			authorUrl,
+		);
+	});
+
+	it.each([
+		'https://linkedin.com.evil.invalid/in/person/',
+		'https://linkedin.com@evil.invalid/in/person/',
+		'https://user:password@www.linkedin.com/in/person/',
+		'http://www.linkedin.com/in/person/',
+		'https://www.linkedin.com/in/',
+	])('does not mistake unrelated or incomplete links for author profiles (%s)', (authorUrl) => {
+		expect(
+			parseFeedPage(fixture([card({ id: '101', authorUrl })], null)).posts[0].author.url,
+		).toBeNull();
+	});
+
+	it('does not round unsafe numeric activity IDs into incorrect post URLs', () => {
+		const source = card({ id: '101' }) as unknown[];
+		const props = source[3] as Record<string, unknown>;
+		props.viewTrackingSpecs = { activityId: Number.MAX_SAFE_INTEGER + 1 };
+		expect(parseFeedPage(fixture([source], null)).posts[0].urn).toBe('urn:li:activity:101');
+		delete props.visibilityTriggers;
+		expect(() => parseFeedPage(fixture([source], null))).toThrow('changed its feed response');
+	});
+
+	it('bounds text expansion when a compact Flight graph repeats shared branches', () => {
+		const source = card({ id: '101' }) as unknown[];
+		(source[3] as Record<string, unknown>).children = tracked(
+			'feed-full-update',
+			tracked('feed-commentary', element({ textProps: { children: '$100' } })),
+		);
+		const rows: Buffer[] = [fixture([source], null)];
+		for (let index = 0; index < 18; index++) {
+			const id = (0x100 + index).toString(16);
+			const next = `$${(0x101 + index).toString(16)}`;
+			rows.push(Buffer.from(`${id}:${JSON.stringify([next, next])}\n`));
+		}
+		rows.push(Buffer.from('112:"Repeated text"\n'));
+		expect(() => parseFeedPage(Buffer.concat(rows))).toThrow('changed its feed response');
+	});
+
 	it('decodes the shared installation fixture', () => {
 		const page = parseFeedPage(
 			readFileSync(new URL('./fixtures/install-feed.rsc', import.meta.url)),

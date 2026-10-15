@@ -1,0 +1,22 @@
+{
+	"name": "LinkedIn Feed Tool with Numeric Limit",
+	"nodes": [
+		{
+			"parameters": {
+				"operation": "getPosts",
+				"limit": "={{ $fromAI('limit', 'Number of posts to retrieve; a positive whole number', 'number') }}",
+				"options": {},
+				"descriptionType": "manual",
+				"toolDescription": "Retrieve recent unique organic posts from my LinkedIn main feed in recent-first order. Supply only a numeric limit, for example {\"limit\":5}. Credentials and options are configured in the node. Returns author, post text, post URL, publication label, media, and available engagement counts. Exact publication timestamps are unavailable."
+			},
+			"id": "linkedin-feed-tool",
+			"name": "LinkedIn Feed Tool",
+			"type": "n8n-nodes-linkedin-feed.linkedInFeedTool",
+			"typeVersion": 1,
+			"position": [260, 200]
+		}
+	],
+	"connections": {},
+	"settings": { "executionOrder": "v1" },
+	"active": false
+}

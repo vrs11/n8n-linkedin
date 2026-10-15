@@ -2,6 +2,7 @@ import { Flight, elementProps, isObject } from './flight';
 import type { Data } from './flight';
 import { LinkedInFeedError } from './types';
 import type { FeedPage, FeedPost, PaginationPayload } from './types';
+import { authorType } from './profiles';
 
 const PAGER = 'com.linkedin.sdui.pagers.feed.mainFeed';
 const fail = () =>
@@ -33,7 +34,7 @@ function* objects(flight: Flight, source: unknown, metadata = false): Generator<
 		if (props) {
 			stack.push(props);
 		} else if (Array.isArray(value)) {
-			stack.push(...[...value].reverse());
+			for (let index = value.length - 1; index >= 0; index--) stack.push(value[index]);
 		} else if (isObject(value)) {
 			yield value;
 			for (const [key, child] of Object.entries(value).reverse()) {
@@ -53,14 +54,20 @@ function regions(flight: Flight, source: unknown, name: string): Data[] {
 }
 
 /** Read visible text only, keeping inline spans together and explicit line breaks. */
-function text(flight: Flight, source: unknown, depth = 0, ancestors = new Set<object>()): string {
-	if (depth > 150) throw fail();
+function text(
+	flight: Flight,
+	source: unknown,
+	depth = 0,
+	ancestors = new Set<object>(),
+	budget = { remaining: 200_000 },
+): string {
+	if (depth > 150 || --budget.remaining < 0) throw fail();
 	const value = flight.resolve(source);
 	if (typeof value === 'string') return value;
 	if (typeof value === 'number') return String(value);
 	if (!value || typeof value !== 'object' || ancestors.has(value)) return '';
 	const next = new Set(ancestors).add(value);
-	const read = (child: unknown) => text(flight, child, depth + 1, next);
+	const read = (child: unknown) => text(flight, child, depth + 1, next, budget);
 	const props = elementProps(value);
 	if (props) {
 		if (props['aria-hidden'] === true || props['aria-hidden'] === 'true') return '';
@@ -210,7 +217,8 @@ function postIdentity(flight: Flight, props: Data): { urn: string; sponsored: bo
 	for (const node of objects(flight, identity, true)) {
 		const activity = node.activityId;
 		if (
-			(typeof activity === 'string' || typeof activity === 'number') &&
+			(typeof activity === 'string' ||
+				(typeof activity === 'number' && Number.isSafeInteger(activity))) &&
 			/^\d+$/.test(String(activity))
 		) {
 			return {
@@ -302,9 +310,7 @@ function parsePost(flight: Flight, card: unknown, states: Map<string, unknown>):
 					!/^(?:[•·]\s*)?(?:1st|2nd|3rd\+?|following|\d[\d,.]* followers)\b/i.test(s),
 			) ?? null;
 	const authorUrl = actor
-		? (links(flight, actor).find((url) =>
-				/^https:\/\/(?:www\.)?linkedin\.com\/(?:in|company)\//.test(url),
-			) ?? null)
+		? (links(flight, actor).find((url) => authorType(url) !== null) ?? null)
 		: null;
 	const engagement = (prefix: string, region: string): number | null => {
 		const initial = count(initialValue(states.get(`${prefix}-${identity.urn}`), states));

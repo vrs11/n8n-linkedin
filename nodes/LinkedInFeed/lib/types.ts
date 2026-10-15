@@ -9,6 +9,7 @@ export interface CollectionOptions {
 	timeout: number;
 	maxPages: number;
 	maxRetries: number;
+	excludeCompanies: boolean;
 }
 
 export const DEFAULT_OPTIONS: CollectionOptions = {
@@ -16,6 +17,7 @@ export const DEFAULT_OPTIONS: CollectionOptions = {
 	timeout: 25_000,
 	maxPages: 100,
 	maxRetries: 2,
+	excludeCompanies: false,
 };
 
 export interface PaginationPayload {
@@ -68,15 +70,37 @@ export function positiveInteger(value: unknown, name: string): number {
 	return value;
 }
 
-export function validateOptions(options: CollectionOptions): void {
-	positiveInteger(options.limit, 'Limit');
-	positiveInteger(options.timeout, 'Request Timeout');
-	positiveInteger(options.maxPages, 'Maximum Pages');
+export function validateOptions(options: unknown): asserts options is CollectionOptions {
+	if (!options || typeof options !== 'object' || Array.isArray(options)) {
+		throw new LinkedInFeedError('Options must be a collection of named settings.');
+	}
+	const values = options as Record<string, unknown>;
+	if (typeof values.excludeCompanies !== 'boolean') {
+		throw new LinkedInFeedError('Exclude Companies must be a boolean.');
+	}
+	positiveInteger(values.limit, 'Limit');
+	positiveInteger(values.timeout, 'Request Timeout');
+	positiveInteger(values.maxPages, 'Maximum Pages');
 	if (
-		!Number.isSafeInteger(options.maxRetries) ||
-		options.maxRetries < 0 ||
-		options.maxRetries > 10
+		typeof values.maxRetries !== 'number' ||
+		!Number.isSafeInteger(values.maxRetries) ||
+		values.maxRetries < 0 ||
+		values.maxRetries > 10
 	) {
 		throw new LinkedInFeedError('Maximum Retries must be an integer between 0 and 10.');
 	}
+}
+
+export function resolveOptions(limit: unknown, advanced: unknown): CollectionOptions {
+	if (limit === undefined || limit === null) {
+		throw new LinkedInFeedError(
+			'Limit is missing. Set a positive whole number or configure a numeric AI tool argument.',
+		);
+	}
+	if (!advanced || typeof advanced !== 'object' || Array.isArray(advanced)) {
+		throw new LinkedInFeedError('Options must be a collection of named settings.');
+	}
+	const options = { ...DEFAULT_OPTIONS, ...advanced, limit };
+	validateOptions(options);
+	return options;
 }

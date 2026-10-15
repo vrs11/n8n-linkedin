@@ -10,8 +10,8 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import { collectPosts, initialPayload, LinkedInClient } from './lib/client';
-import { DEFAULT_OPTIONS, LinkedInFeedError, publicError } from './lib/types';
-import type { CollectionOptions, SessionCredentials } from './lib/types';
+import { DEFAULT_OPTIONS, LinkedInFeedError, publicError, resolveOptions } from './lib/types';
+import type { SessionCredentials } from './lib/types';
 
 export class LinkedInFeed implements INodeType {
 	description: INodeTypeDescription = {
@@ -28,6 +28,36 @@ export class LinkedInFeed implements INodeType {
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'linkedInSessionApi', required: true, testedBy: 'linkedInSessionTest' }],
 		properties: [
+			{
+				displayName: 'Tool Description',
+				name: 'descriptionType',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { '@tool': [true] } },
+				options: [
+					{
+						name: 'Set Automatically',
+						value: 'auto',
+						description: 'Describe the selected operation',
+					},
+					{
+						name: 'Set Manually',
+						value: 'manual',
+						description: 'Provide a detailed tool description',
+					},
+				],
+				default: 'manual',
+			},
+			{
+				displayName: 'Description',
+				name: 'toolDescription',
+				type: 'string',
+				typeOptions: { rows: 4 },
+				displayOptions: { show: { '@tool': [true], descriptionType: ['manual'] } },
+				default:
+					'Retrieve recent unique organic posts from the signed-in LinkedIn main feed in recent-first order. If a post count is exposed in the input schema, supply a positive whole number using that argument name. Credentials and filtering options are configured in the node. Returns author, post text, post URL, publication label, media, and available engagement counts. Exact publication timestamps are unavailable.',
+				description: 'Describe this tool and its arguments to the AI Agent',
+			},
 			{
 				displayName: 'Operation',
 				name: 'operation',
@@ -50,6 +80,7 @@ export class LinkedInFeed implements INodeType {
 				default: DEFAULT_OPTIONS.limit,
 				typeOptions: { minValue: 1, numberPrecision: 0 },
 				description: 'Max number of results to return',
+				hint: 'For AI tools, let the model define this parameter with type number to accept a post count. A fixed value is not an agent input.',
 			},
 			{
 				displayName: 'Options',
@@ -58,6 +89,14 @@ export class LinkedInFeed implements INodeType {
 				placeholder: 'Add Option',
 				default: {},
 				options: [
+					{
+						displayName: 'Exclude Companies',
+						name: 'excludeCompanies',
+						type: 'boolean',
+						default: DEFAULT_OPTIONS.excludeCompanies,
+						description:
+							'Whether to return only posts with an identifiable personal profile as the author, skipping companies and unknown authors. Limit counts only matching posts.',
+					},
 					{
 						displayName: 'Maximum Pages',
 						name: 'maxPages',
@@ -127,24 +166,25 @@ export class LinkedInFeed implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const output: INodeExecutionData[] = [];
+		const signal = this.getExecutionCancelSignal();
+		const assertActive = () => {
+			if (signal?.aborted) throw new LinkedInFeedError('LinkedIn feed retrieval was cancelled.');
+		};
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+			let phase: 'parameters' | 'credentials' | 'feed' = 'parameters';
 			try {
+				assertActive();
 				const operation = this.getNodeParameter('operation', itemIndex) as string;
 				if (operation !== 'getPosts')
 					throw new LinkedInFeedError('Unsupported LinkedIn Feed operation.');
-				const advanced = this.getNodeParameter(
-					'options',
-					itemIndex,
-					{},
-				) as Partial<CollectionOptions>;
-				const options: CollectionOptions = {
-					limit: this.getNodeParameter('limit', itemIndex) as number,
-					timeout: advanced.timeout ?? DEFAULT_OPTIONS.timeout,
-					maxPages: advanced.maxPages ?? DEFAULT_OPTIONS.maxPages,
-					maxRetries: advanced.maxRetries ?? DEFAULT_OPTIONS.maxRetries,
-				};
+				const options = resolveOptions(
+					this.getNodeParameter('limit', itemIndex),
+					this.getNodeParameter('options', itemIndex, {}),
+				);
+				phase = 'credentials';
 				const credentials = await this.getCredentials('linkedInSessionApi', itemIndex);
-				const signal = this.getExecutionCancelSignal();
+				assertActive();
+				phase = 'feed';
 				const client = new LinkedInClient(
 					this.helpers.httpRequest.bind(this),
 					credentials as unknown as SessionCredentials,
@@ -152,10 +192,6 @@ export class LinkedInFeed implements INodeType {
 					undefined,
 					signal,
 				);
-				const assertActive = () => {
-					if (signal?.aborted)
-						throw new LinkedInFeedError('LinkedIn feed retrieval was cancelled.');
-				};
 				const posts = await collectPosts(client, options, assertActive);
 				output.push(
 					...posts.map((post) => ({
@@ -164,7 +200,17 @@ export class LinkedInFeed implements INodeType {
 					})),
 				);
 			} catch (error) {
-				const message = publicError(error);
+				// Execution cancellation must propagate even when ordinary item errors may continue.
+				if (signal?.aborted)
+					throw new NodeOperationError(this.getNode(), 'LinkedIn feed retrieval was cancelled.', {
+						itemIndex,
+					});
+				const message =
+					error instanceof LinkedInFeedError || phase === 'feed'
+						? publicError(error)
+						: phase === 'parameters'
+							? 'Could not evaluate LinkedIn Feed parameters. Check the Limit and Options expressions.'
+							: 'Could not load LinkedIn session credentials. Check the selected credential and access permissions.';
 				if (this.continueOnFail())
 					output.push({ json: { error: message }, pairedItem: { item: itemIndex } });
 				else throw new NodeOperationError(this.getNode(), message, { itemIndex });

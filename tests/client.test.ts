@@ -12,6 +12,25 @@ import { DEFAULT_OPTIONS, publicError } from '../nodes/LinkedInFeed/lib/types';
 import { card, credentials, fixture, nextPayload, response } from './fixtures';
 
 describe('session transport', () => {
+	it('reports cancellation before handling a late HTTP error response', async () => {
+		const controller = new AbortController();
+		const http = vi.fn().mockImplementation(async () => {
+			controller.abort();
+			return response(Buffer.from(''), 403);
+		});
+		await expect(
+			new LinkedInClient(http, credentials, DEFAULT_OPTIONS, undefined, controller.signal).page(
+				initialPayload(),
+			),
+		).rejects.toThrow('cancelled');
+	});
+
+	it.each([Number.NaN, 200.5, 0, 600])('rejects invalid HTTP status codes (%s)', async (status) => {
+		const http = vi.fn().mockResolvedValue(response(fixture(), status));
+		await expect(
+			new LinkedInClient(http, credentials, DEFAULT_OPTIONS).page(initialPayload()),
+		).rejects.toThrow('Unexpected HTTP response');
+	});
 	it('propagates cancellation to HTTP requests and cancels retry waits', async () => {
 		const controller = new AbortController();
 		const http = vi.fn().mockResolvedValue(response(Buffer.from(''), 429, { 'retry-after': '60' }));
@@ -163,6 +182,8 @@ describe('session transport', () => {
 		{ ...credentials, liAt: '' },
 		{ ...credentials, liAt: 'x; other=secret' },
 		{ ...credentials, userAgent: 'injected\r\nCookie: bad' },
+		{ ...credentials, jsessionId: '""' },
+		{ ...credentials, jsessionId: '"ajax:unclosed' },
 	])('validates credentials before making requests', (invalid) => {
 		const http = vi.fn();
 		expect(() => new LinkedInClient(http, invalid, DEFAULT_OPTIONS)).toThrow();
@@ -171,6 +192,91 @@ describe('session transport', () => {
 });
 
 describe('collection', () => {
+	it('includes personal profiles on localized LinkedIn hosts when filtering companies', async () => {
+		const page = vi.fn().mockResolvedValue(
+			parseFeedPage(
+				fixture(
+					[
+						card({ id: '101', authorUrl: 'https://uk.linkedin.com/in/example-person/' }),
+						card({
+							id: '102',
+							company: true,
+							authorUrl: 'https://es.linkedin.com/company/example-company/',
+						}),
+					],
+					null,
+				),
+			),
+		);
+		const posts = await collectPosts({ page }, { ...DEFAULT_OPTIONS, excludeCompanies: true });
+		expect(posts.map((post) => post.urn)).toEqual(['urn:li:activity:101']);
+	});
+
+	it('counts only unique people posts and paginates past company-only pages when enabled', async () => {
+		const page = vi
+			.fn()
+			.mockResolvedValueOnce(parseFeedPage(fixture([card({ id: '100', company: true })])))
+			.mockResolvedValueOnce({
+				...parseFeedPage(fixture()),
+				next: { ...nextPayload, startIndex: 8, token: 'second-cursor' },
+			})
+			.mockResolvedValueOnce(
+				parseFeedPage(
+					fixture(
+						[
+							card({ id: '101' }),
+							card({ id: '104', company: true }),
+							card({ id: '105' }),
+							card({ id: '106' }),
+						],
+						null,
+					),
+				),
+			);
+		const posts = await collectPosts(
+			{ page },
+			{ ...DEFAULT_OPTIONS, limit: 2, excludeCompanies: true },
+		);
+		expect(posts.map((post) => post.urn)).toEqual(['urn:li:activity:101', 'urn:li:activity:105']);
+		expect(page).toHaveBeenCalledTimes(3);
+	});
+
+	it('returns fewer people posts on exhaustion and skips unidentified authors only when enabled', async () => {
+		const result = parseFeedPage(
+			fixture([card({ id: '101' }), card({ id: '102', company: true }), card({ id: '103' })], null),
+		);
+		result.posts[2].author.url = null;
+		const page = vi.fn().mockResolvedValue(result);
+		expect(await collectPosts({ page }, DEFAULT_OPTIONS)).toHaveLength(3);
+		const posts = await collectPosts({ page }, { ...DEFAULT_OPTIONS, excludeCompanies: true });
+		expect(posts.map((post) => post.urn)).toEqual(['urn:li:activity:101']);
+	});
+
+	it('keeps people with followers and company mentions based on the author profile', async () => {
+		const result = parseFeedPage(
+			fixture(
+				[card({ id: '101', text: 'News from https://www.linkedin.com/company/example-company/' })],
+				null,
+			),
+		);
+		result.posts[0].author.headline = '10,000 followers';
+		const page = vi.fn().mockResolvedValue(result);
+		expect(await collectPosts({ page }, { ...DEFAULT_OPTIONS, excludeCompanies: true })).toEqual(
+			result.posts,
+		);
+	});
+
+	it('rejects non-boolean company filters before making requests', async () => {
+		const page = vi.fn();
+		await expect(
+			collectPosts(
+				{ page },
+				{ ...DEFAULT_OPTIONS, excludeCompanies: 'false' as unknown as boolean },
+			),
+		).rejects.toThrow('Exclude Companies must be a boolean');
+		expect(page).not.toHaveBeenCalled();
+	});
+
 	it('collects exactly N unique posts, preserving server cursor fields and feed order', async () => {
 		const first = parseFeedPage(fixture());
 		const second = parseFeedPage(

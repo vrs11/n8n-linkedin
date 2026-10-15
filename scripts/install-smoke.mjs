@@ -330,8 +330,8 @@ try {
 			},
 		};
 		const dynamic = makeTool(converted, toolDefinition);
-		assert.equal(dynamic.node.parameters.descriptionType, 'manual');
-		assert.match(dynamic.tool.description, /positive whole number/);
+		assert.equal(dynamic.node.parameters.descriptionType, 'auto');
+		assert.equal(dynamic.tool.description, base.description.description);
 		const connected = await getConnectedTools(
 			{ getNode: () => ({ name: 'Agent' }), getInputConnectionData: async () => [dynamic.tool] },
 			true,
@@ -382,9 +382,14 @@ try {
 		compatibilityCases++;
 		const legacy = makeTool(converted, {
 			...toolDefinition,
-			parameters: { ...toolDefinition.parameters, descriptionType: 'auto' },
+			parameters: {
+				...toolDefinition.parameters,
+				descriptionType: 'manual',
+				toolDescription: 'Use my saved description',
+			},
 		});
-		assert.equal(legacy.node.parameters.descriptionType, 'auto');
+		assert.equal(legacy.node.parameters.descriptionType, 'manual');
+		assert.equal(legacy.tool.description, 'Use my saved description');
 		assert(
 			NodeHelpers.displayParameter(
 				legacy.node.parameters,

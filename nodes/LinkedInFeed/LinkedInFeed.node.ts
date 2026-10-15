@@ -46,7 +46,7 @@ export class LinkedInFeed implements INodeType {
 						description: 'Provide a detailed tool description',
 					},
 				],
-				default: 'manual',
+				default: 'auto',
 			},
 			{
 				displayName: 'Description',

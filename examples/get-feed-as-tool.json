@@ -5,9 +5,7 @@
 			"parameters": {
 				"operation": "getPosts",
 				"limit": "={{ $fromAI('limit', 'Number of posts to retrieve; a positive whole number', 'number') }}",
-				"options": {},
-				"descriptionType": "manual",
-				"toolDescription": "Retrieve recent unique organic posts from my LinkedIn main feed in recent-first order. Supply only a numeric limit, for example {\"limit\":5}. Credentials and options are configured in the node. Returns author, post text, post URL, publication label, media, and available engagement counts. Exact publication timestamps are unavailable."
+				"options": {}
 			},
 			"id": "linkedin-feed-tool",
 			"name": "LinkedIn Feed Tool",

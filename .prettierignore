@@ -1,0 +1,2 @@
+# Preserve the exact JSON serialization inside the observed protocol fixture.
+tests/fixtures/comment-page.html

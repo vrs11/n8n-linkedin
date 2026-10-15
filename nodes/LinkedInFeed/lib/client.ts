@@ -1,5 +1,3 @@
-import { CookieJar } from 'tough-cookie';
-import type { IHttpRequestOptions } from 'n8n-workflow';
 import { setTimeout as wait } from 'node:timers/promises';
 import { isObject } from './flight';
 import { parseFeedPage } from './parser';
@@ -15,7 +13,9 @@ import type {
 
 export const PAGER = 'com.linkedin.sdui.pagers.feed.mainFeed';
 export const ENDPOINT = `https://www.linkedin.com/flagship-web/rsc-action/actions/pagination?sduiid=${PAGER}`;
-export type HttpRequest = (options: IHttpRequestOptions) => Promise<unknown>;
+export type { HttpRequest } from '../../shared/session';
+import { LinkedInSession } from '../../shared/session';
+import type { HttpRequest } from '../../shared/session';
 type Sleep = (milliseconds: number) => Promise<void>;
 const TRANSIENT = new Set([429, 502, 503, 504]);
 const NETWORK_CODES = new Set([
@@ -70,17 +70,6 @@ export function requestBody(payload: PaginationPayload): Record<string, unknown>
 	};
 }
 
-function credential(value: unknown, label: string): string {
-	if (
-		typeof value !== 'string' ||
-		!value.trim() ||
-		[...value].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)
-	) {
-		throw new LinkedInFeedError(`${label} is required and must not contain control characters.`);
-	}
-	return value.trim();
-}
-
 function header(headers: Record<string, unknown>, name: string): unknown {
 	return Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
 }
@@ -96,12 +85,11 @@ export function retryDelay(value: unknown, attempt: number, now = Date.now()): n
 
 /** Owns one session's cookie state. All network I/O goes through the injected n8n helper. */
 export class LinkedInClient {
-	private readonly jar = new CookieJar();
-	private readonly userAgent: string;
+	private readonly session: LinkedInSession;
 	private readonly sleep: Sleep;
 
 	constructor(
-		private readonly http: HttpRequest,
+		http: HttpRequest,
 		credentials: SessionCredentials,
 		private readonly options: CollectionOptions,
 		sleep?: Sleep,
@@ -117,24 +105,7 @@ export class LinkedInClient {
 					throw new LinkedInFeedError('LinkedIn feed retrieval was cancelled.');
 				}
 			});
-		const liAt = credential(credentials.liAt, 'li_at');
-		const rawSession = credential(credentials.jsessionId, 'JSESSIONID');
-		const session =
-			rawSession.startsWith('"') && rawSession.endsWith('"') ? rawSession.slice(1, -1) : rawSession;
-		this.userAgent = credential(credentials.userAgent, 'User-Agent');
-		if (!session || /[;"\\\s]/.test(liAt) || /[;"\\\s]/.test(session)) {
-			throw new LinkedInFeedError(
-				'Paste cookie values only, without Cookie header names or separators.',
-			);
-		}
-		try {
-			this.jar.setCookieSync(`li_at=${liAt}; Path=/; Secure; HttpOnly`, ENDPOINT);
-			this.jar.setCookieSync(`JSESSIONID="${session}"; Path=/; Secure`, ENDPOINT);
-		} catch {
-			throw new LinkedInFeedError(
-				'Invalid LinkedIn session cookies. Export the current cookie values again.',
-			);
-		}
+		this.session = new LinkedInSession(http, credentials);
 	}
 
 	async page(payload: PaginationPayload): Promise<FeedPage> {
@@ -142,39 +113,17 @@ export class LinkedInClient {
 		for (let attempt = 0; attempt <= this.options.maxRetries; attempt++) {
 			if (this.signal?.aborted)
 				throw new LinkedInFeedError('LinkedIn feed retrieval was cancelled.');
-			const cookies = this.jar.getCookiesSync(ENDPOINT);
-			const csrf = cookies
-				.find((cookie) => cookie.key === 'JSESSIONID')
-				?.value.replace(/^"|"$/g, '');
-			if (!csrf || !cookies.some((cookie) => cookie.key === 'li_at')) {
-				throw new LinkedInFeedError(
-					'LinkedIn session expired. Update the session credential with fresh cookies.',
-				);
-			}
 			let response: unknown;
 			try {
-				response = await this.http({
-					url: ENDPOINT,
-					abortSignal: this.signal,
-					method: 'POST',
-					body: JSON.stringify(requestBody(payload)),
-					headers: {
-						'Content-Type': 'application/json',
-						'csrf-token': csrf,
-						'x-li-rsc-stream': 'true',
-						Referer: 'https://www.linkedin.com/feed/',
-						'User-Agent': this.userAgent,
-						Cookie: this.jar.getCookieStringSync(ENDPOINT),
-					},
-					timeout: this.options.timeout,
-					encoding: 'arraybuffer',
-					json: false,
-					returnFullResponse: true,
-					ignoreHttpStatusErrors: true,
-					disableFollowRedirect: true,
-					sendCredentialsOnCrossOriginRedirect: false,
-				});
+				response = await this.session.request(
+					ENDPOINT,
+					'POST',
+					this.options.timeout,
+					this.signal,
+					requestBody(payload),
+				);
 			} catch (error) {
+				if (error instanceof LinkedInFeedError) throw error;
 				if (this.signal?.aborted)
 					throw new LinkedInFeedError('LinkedIn feed retrieval was cancelled.');
 				const code = isObject(error)
@@ -214,20 +163,6 @@ export class LinkedInClient {
 				throw new LinkedInFeedError(
 					'LinkedIn requires sign-in or session verification. Update the session credential with fresh cookies.',
 				);
-			}
-			// Accept same-origin cookie changes, including deletion, before the next attempt/page.
-			const updates = header(response.headers, 'set-cookie');
-			for (const cookie of Array.isArray(updates)
-				? updates
-				: typeof updates === 'string'
-					? [updates]
-					: []) {
-				if (typeof cookie !== 'string') continue;
-				try {
-					this.jar.setCookieSync(cookie, ENDPOINT);
-				} catch {
-					/* Ignore cookies invalid for this origin. */
-				}
 			}
 			if (TRANSIENT.has(status)) {
 				const delay = retryDelay(header(response.headers, 'retry-after'), attempt);

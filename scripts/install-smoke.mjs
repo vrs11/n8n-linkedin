@@ -102,6 +102,20 @@ try {
 		},
 		evalLlmMockHandler: async (options) => {
 			requests++;
+			if (options.method === 'GET')
+				return {
+					statusCode: 200,
+					headers: { 'content-type': 'text/html' },
+					body: readFileSync(new URL('../tests/fixtures/comment-page.html', import.meta.url)),
+				};
+			if (options.url.includes('comments.createComment')) {
+				assert.equal(JSON.parse(options.body).states[0].value, 'Fixture comment');
+				return {
+					statusCode: 200,
+					headers: { 'content-type': 'application/octet-stream' },
+					body: readFileSync(new URL('../tests/fixtures/comment-created.rsc', import.meta.url)),
+				};
+			}
 			assert.equal(JSON.parse(options.body).clientArguments.payload.startIndex, 0);
 			return {
 				statusCode: responseStatus,
@@ -407,6 +421,83 @@ try {
 		responseStatus = 200;
 		compatibilityCases++;
 	}
+	let commentCompatibilityCases = 0;
+	const commentExample = JSON.parse(
+		readFileSync(new URL('../examples/create-comment-as-tool.json', import.meta.url), 'utf8'),
+	).nodes[0];
+	for (const [prefix, sourceLoader] of [
+		['n8n-nodes-linkedin-feed', loader],
+		['CUSTOM', customLoader],
+	]) {
+		const base = sourceLoader.nodeTypes.linkedInComment.type;
+		assert(base);
+		assert.equal(base.description.credentials[0].name, 'linkedInSessionApi');
+		const definition = {
+			name: 'Comment',
+			type: `${prefix}.linkedInComment`,
+			typeVersion: 1,
+			position: [0, 0],
+			credentials: { linkedInSessionApi: { id: 'fixture', name: 'fixture' } },
+			parameters: { postUrn: '={{ $json.urn }}', text: '={{ $json.comment }}', options: {} },
+		};
+		for (const mode of ['manual', 'trigger', 'integrated']) {
+			const workflow = makeWorkflow(base, definition);
+			const run = freshRun();
+			const data = {
+				node: workflow.getNode('Comment'),
+				data: { main: [[{ json: { urn: 'urn:li:share:202', comment: 'Fixture comment' } }]] },
+				source: { main: [null] },
+			};
+			const result = await new WorkflowExecute(additionalData, mode, run).runNode(
+				workflow,
+				data,
+				run,
+				0,
+				additionalData,
+				mode,
+			);
+			assert.equal(result.data[0][0].json.commentUrn, 'urn:li:comment:(activity:101,999)');
+			assert.equal(result.data[0][0].json.postUrn, 'urn:li:share:202');
+			assert.deepEqual(result.data[0][0].pairedItem, { item: 0 });
+			commentCompatibilityCases++;
+		}
+		const converted = convertNodeToAiTool({ description: structuredClone(base.description) });
+		converted.execute = base.execute;
+		const dynamic = makeTool(converted, {
+			...commentExample,
+			type: `${prefix}.linkedInCommentTool`,
+			credentials: definition.credentials,
+		});
+		assert.equal(dynamic.node.parameters.descriptionType, 'auto');
+		const schema = getParametersJsonSchema({
+			type: 'function',
+			name: dynamic.tool.name,
+			description: dynamic.tool.description,
+			inputSchema: dynamic.tool.schema,
+		});
+		const mcp = zodToDraft202012(dynamic.tool.schema, { removeAdditionalStrategy: 'strict' });
+		for (const result of [schema, mcp]) {
+			assert.equal(result.properties.postUrn.type, 'string');
+			assert.equal(result.properties.text.type, 'string');
+			commentCompatibilityCases++;
+		}
+		const result = JSON.parse(
+			await dynamic.tool.invoke({ postUrn: 'urn:li:activity:101', text: 'Fixture comment' }),
+		);
+		assert.equal(result[0].commentUrn, 'urn:li:comment:(activity:101,999)');
+		commentCompatibilityCases++;
+		const before = requests;
+		for (const args of [
+			{ input: 'leave a comment' },
+			{ postUrn: 101, text: 'Fixture comment' },
+			{ postUrn: 'urn:li:activity:101', text: 5 },
+			{ postUrn: 'invalid', text: 'Fixture comment' },
+		]) {
+			await assert.rejects(dynamic.tool.invoke(args));
+			commentCompatibilityCases++;
+		}
+		assert.equal(requests, before, 'Invalid comment tool inputs must not send requests');
+	}
 	console.log(
 		JSON.stringify({
 			n8n: version,
@@ -416,6 +507,7 @@ try {
 			executed: true,
 			numericToolInput: true,
 			compatibilityCases,
+			commentCompatibilityCases,
 			customNodeLoaded: true,
 			requests,
 		}),

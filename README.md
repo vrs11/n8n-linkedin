@@ -1,6 +1,6 @@
-# n8n LinkedIn Feed
+# n8n LinkedIn Feed and Comments
 
-Retrieve up to **N unique organic posts** from the signed-in account's main LinkedIn feed. Credentials and Limit are configurable in n8n. Posts arrive as separate items, ready for downstream nodes.
+Retrieve up to **N unique organic posts** from the signed-in account's main LinkedIn feed. Credentials and Limit are configurable in n8n. Posts arrive as separate items, ready for downstream nodes. **LinkedIn Comment** publishes a plain-text comment using a post URN and text, with the same session credential.
 
 This private package targets **self-hosted n8n 2.43.5 and Node.js 24+**. It uses the plain HTTP session protocol demonstrated in `investigation/`, including LinkedIn's recent-first feed refresh and server-supplied continuation payloads.
 
@@ -22,7 +22,7 @@ npm install --prefix ~/.n8n/nodes --omit=dev --ignore-scripts --install-links /a
 
 Restart n8n. Your instance must allow community packages. If you configured a custom n8n user directory, use its `nodes` directory instead. Queue-mode workers need the same package installed.
 
-For a deployment using custom extensions instead of package installation, set `N8N_CUSTOM_EXTENSIONS=/absolute/path/on/server/n8n-linkedin/dist` in the n8n service environment after building. Keep the project's installed runtime dependencies available alongside that `dist` directory. Restart n8n and its workers after updating. This loading mode registers the node as `CUSTOM.linkedInFeed` and its generated tool as `CUSTOM.linkedInFeedTool`; package installation uses the `n8n-nodes-linkedin-feed` prefix. Existing workflows must reference the type prefix used by their deployment.
+For a deployment using custom extensions instead of package installation, set `N8N_CUSTOM_EXTENSIONS=/absolute/path/on/server/n8n-linkedin/dist` in the n8n service environment after building. Keep the project's installed runtime dependencies available alongside that `dist` directory. Restart n8n and its workers after updating. This loading mode registers `CUSTOM.linkedInFeed`, `CUSTOM.linkedInComment`, and their generated `Tool` variants; package installation uses the `n8n-nodes-linkedin-feed` prefix. Existing workflows must reference the type prefix used by their deployment.
 
 `--install-links` installs a copy of the built package instead of a symlink to the source directory. `--ignore-scripts` skips installation hooks because you already built the node.
 
@@ -140,3 +140,24 @@ N8N_RUNTIME_DIR=/path/to/n8n-runtime npm run test:live -- --env-file investigati
 The installation check installs the built node directly from the source directory into a temporary directory and exercises n8n's package and custom-directory loaders. Native engine checks cover manual, triggered, and integrated execution, per-item expressions, fixed and dynamic tool parameters, concurrent calls, empty results, authentication failures, tool-description defaults and migration, AI SDK conversion, and MCP schema serialization. Both checks isolate n8n settings in temporary folders and clean them up. The opt-in live check uses the n8n package loader and HTTP helper to retrieve the requested count with your supplied session. It reports counts only and does not persist credentials or post contents. You can alternatively provide `LI_AT`, `JSESSIONID`, and `LINKEDIN_USER_AGENT` as environment variables.
 
 The installed package includes compiled node code, credential code, the icon, this README, and the example workflow. Investigation files, tests, development scripts, and credentials are excluded. This is an internal, unlicensed package; the lint configuration retains n8n checks with narrowly documented exceptions for private-package metadata, the cookie dependency, and domain-error boundaries.
+
+## Create a comment
+
+Add **LinkedIn Comment**, select your existing **LinkedIn Session API** credential, and configure **Post URN** and **Comment Text**. Post URN accepts `urn:li:activity:…`, `urn:li:share:…`, and `urn:li:ugcPost:…`. Use the `urn` returned by LinkedIn Feed directly. The node loads the supplied post to resolve its activity thread and current comment form; it never assumes share and activity IDs are interchangeable.
+
+Both fields support expressions. The [workflow example](examples/create-comment.json) uses `={{ $json.urn }}` and `={{ $json.comment }}` from an upstream item. It creates one comment per input item and pairs each result with its input. Plain text and line breaks are preserved; rich mentions, media attachments, and replies to other comments are not supported.
+
+For an **AI Agent** or **MCP Server Trigger**, use **LinkedIn Comment Tool**. The [tool example](examples/create-comment-as-tool.json) exposes two string arguments:
+
+```text
+{{ $fromAI('postUrn', 'URN of the LinkedIn post to comment on', 'string') }}
+{{ $fromAI('text', 'Exact plain-text comment to publish', 'string') }}
+```
+
+The tool expects an object such as `{"postUrn":"urn:li:activity:123456789","text":"Thanks for sharing."}`. Fixed fields remain configuration and are not exposed as agent arguments. Tool Description defaults to **Set Automatically**; model-defined expressions are configured explicitly. For custom-extension installations, change the example's type prefix to `CUSTOM`.
+
+A successful result contains `postUrn`, resolved `activityUrn`, `commentUrn`, `commentId`, the submitted `text`, and `postUrl`. Success requires LinkedIn's server response to identify the created comment in the expected activity thread. Request Timeout defaults to 25,000 ms per request.
+
+Comment submissions are sent **once**, without automatic retries. A timeout, HTTP 500, cancellation during submission, or malformed response can occur after LinkedIn has already created the comment. Such errors tell you to check the post before retrying. n8n's **Retry On Fail**, manual workflow reruns, and repeated agent calls can still create duplicates; these are separate invocations. Continue On Fail returns a paired error for the affected item; cancellation stops the execution.
+
+This uses LinkedIn's browser session/SDUI protocol. The node reads the post's request template as data and submits only the supported comment fields; it does not execute page scripts or UI callbacks. The protocol can change, and inaccessible posts or disabled comments fail before submission when no supported form is available. Rebuild, reinstall the package copy if applicable, and restart n8n and its workers to load the new node.

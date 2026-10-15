@@ -1,15 +1,14 @@
+import { toolDescriptionProperties } from '../shared/toolDescription';
+import { sessionMethods } from '../shared/credentialTest';
 import type {
-	ICredentialTestFunctions,
-	ICredentialsDecrypted,
 	IDataObject,
 	IExecuteFunctions,
-	INodeCredentialTestResult,
 	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
-import { collectPosts, initialPayload, LinkedInClient } from './lib/client';
+import { collectPosts, LinkedInClient } from './lib/client';
 import { DEFAULT_OPTIONS, LinkedInFeedError, publicError, resolveOptions } from './lib/types';
 import type { SessionCredentials } from './lib/types';
 
@@ -28,36 +27,9 @@ export class LinkedInFeed implements INodeType {
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'linkedInSessionApi', required: true, testedBy: 'linkedInSessionTest' }],
 		properties: [
-			{
-				displayName: 'Tool Description',
-				name: 'descriptionType',
-				type: 'options',
-				noDataExpression: true,
-				displayOptions: { show: { '@tool': [true] } },
-				options: [
-					{
-						name: 'Set Automatically',
-						value: 'auto',
-						description: 'Describe the selected operation',
-					},
-					{
-						name: 'Set Manually',
-						value: 'manual',
-						description: 'Provide a detailed tool description',
-					},
-				],
-				default: 'auto',
-			},
-			{
-				displayName: 'Description',
-				name: 'toolDescription',
-				type: 'string',
-				typeOptions: { rows: 4 },
-				displayOptions: { show: { '@tool': [true], descriptionType: ['manual'] } },
-				default:
-					'Retrieve recent unique organic posts from the signed-in LinkedIn main feed in recent-first order. If a post count is exposed in the input schema, supply a positive whole number using that argument name. Credentials and filtering options are configured in the node. Returns author, post text, post URL, publication label, media, and available engagement counts. Exact publication timestamps are unavailable.',
-				description: 'Describe this tool and its arguments to the AI Agent',
-			},
+			...toolDescriptionProperties(
+				'Retrieve recent unique organic posts from the signed-in LinkedIn main feed in recent-first order. If a post count is exposed in the input schema, supply a positive whole number using that argument name. Credentials and filtering options are configured in the node. Returns author, post text, post URL, publication label, media, and available engagement counts. Exact publication timestamps are unavailable.',
+			),
 			{
 				displayName: 'Operation',
 				name: 'operation',
@@ -128,40 +100,7 @@ export class LinkedInFeed implements INodeType {
 		],
 	};
 
-	methods = {
-		credentialTest: {
-			async linkedInSessionTest(
-				this: ICredentialTestFunctions,
-				credentials: ICredentialsDecrypted,
-			): Promise<INodeCredentialTestResult> {
-				try {
-					const client = new LinkedInClient(
-						// n8n's credential-test hook exposes request; executions use httpRequest.
-						(options) =>
-							// eslint-disable-next-line @n8n/community-nodes/no-deprecated-workflow-functions -- Credential-test hooks expose only request in the supported n8n API.
-							this.helpers.request({
-								uri: options.url,
-								method: options.method,
-								headers: options.headers,
-								body: options.body,
-								timeout: options.timeout,
-								encoding: null,
-								resolveWithFullResponse: true,
-								simple: false,
-								followRedirect: false,
-								followAllRedirects: false,
-							}),
-						credentials.data as unknown as SessionCredentials,
-						{ ...DEFAULT_OPTIONS, maxRetries: 0 },
-					);
-					await client.page(initialPayload());
-					return { status: 'OK', message: 'LinkedIn session is valid.' };
-				} catch (error) {
-					return { status: 'Error', message: publicError(error) };
-				}
-			},
-		},
-	};
+	methods = sessionMethods;
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();

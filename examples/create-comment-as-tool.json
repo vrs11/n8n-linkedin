@@ -1,0 +1,23 @@
+{
+	"name": "LinkedIn Comment Tool",
+	"nodes": [
+		{
+			"parameters": {
+				"operation": "createComment",
+				"postUrn": "={{ $fromAI('postUrn', 'URN of the LinkedIn post to comment on', 'string') }}",
+				"text": "={{ $fromAI('text', 'Exact plain-text comment to publish', 'string') }}",
+				"options": {}
+			},
+			"id": "linkedin-comment-tool",
+			"name": "LinkedIn Comment Tool",
+			"type": "n8n-nodes-linkedin-feed.linkedInCommentTool",
+			"typeVersion": 1,
+			"position": [260, 200]
+		}
+	],
+	"connections": {},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"active": false
+}

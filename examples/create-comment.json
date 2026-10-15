@@ -1,0 +1,23 @@
+{
+	"name": "LinkedIn Comment",
+	"nodes": [
+		{
+			"parameters": {
+				"operation": "createComment",
+				"postUrn": "={{ $json.urn }}",
+				"text": "={{ $json.comment }}",
+				"options": {}
+			},
+			"id": "linkedin-comment",
+			"name": "LinkedIn Comment",
+			"type": "n8n-nodes-linkedin-feed.linkedInComment",
+			"typeVersion": 1,
+			"position": [260, 200]
+		}
+	],
+	"connections": {},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"active": false
+}

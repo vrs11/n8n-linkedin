@@ -18,7 +18,10 @@ export default [
 		},
 	},
 	{
-		files: ['nodes/LinkedInFeed/LinkedInFeed.node.ts'],
+		files: [
+			'nodes/LinkedInFeed/LinkedInFeed.node.ts',
+			'nodes/LinkedInComment/LinkedInComment.node.ts',
+		],
 		rules: {
 			// Defaults come from one shared typed object rather than repeated literals.
 			'n8n-nodes-base/node-param-default-missing': 'off',
@@ -27,7 +30,11 @@ export default [
 		},
 	},
 	{
-		files: ['nodes/LinkedInFeed/lib/**/*.ts'],
+		files: [
+			'nodes/LinkedInFeed/lib/**/*.ts',
+			'nodes/LinkedInComment/lib/**/*.ts',
+			'nodes/shared/**/*.ts',
+		],
 		rules: {
 			// Domain functions remain independent of execution context; the adapter wraps errors.
 			'@n8n/community-nodes/require-node-api-error': 'off',

@@ -1,7 +1,7 @@
 {
 	"name": "n8n-nodes-linkedin-feed",
 	"version": "0.1.0",
-	"description": "Retrieve unique organic LinkedIn feed posts using session credentials",
+	"description": "Retrieve LinkedIn feed posts and publish comments using session credentials",
 	"license": "UNLICENSED",
 	"keywords": [
 		"n8n-community-node-package",
@@ -34,7 +34,8 @@
 			"dist/credentials/LinkedInSessionApi.credentials.js"
 		],
 		"nodes": [
-			"dist/nodes/LinkedInFeed/LinkedInFeed.node.js"
+			"dist/nodes/LinkedInFeed/LinkedInFeed.node.js",
+			"dist/nodes/LinkedInComment/LinkedInComment.node.js"
 		]
 	},
 	"dependencies": {

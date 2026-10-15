@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.tgz
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+investigation/**/responses/
+__pycache__/
+.idea/
+.tmp

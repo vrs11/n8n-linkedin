@@ -1,0 +1,3 @@
+0:[[["$","$L3",null,{"modelStates":[]}]],null,[["fixture","$L1"]]]
+1:["$","$L3",null,{"visibilityTriggers":[{"activityUrn":{"activityId":"101"}}],"duplicateDetection":{"onDuplicateDetectedAction":{"actions":[{"value":{"requestedArguments":{"payload":{"isSponsored":false,"updateUrn":"fixture-only"}}}}]}},"children":["$","$L3",null,{"viewTrackingSpecs":{"viewName":"feed-full-update"},"children":[["$","$L3",null,{"viewTrackingSpecs":{"viewName":"feed-actor"},"children":["$","$L3",null,{"textProps":{"children":["Example Person"]}}]}],["$","$L3",null,{"viewTrackingSpecs":{"viewName":"feed-commentary"},"children":["$","$L3",null,{"textProps":{"children":["$2"]}}]}]]}]}]
+2:T18,Fixture post. Café 🚀3:I["never-imported",[],"ClientComponent"]

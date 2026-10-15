@@ -1,0 +1,55 @@
+{
+	"name": "n8n-nodes-linkedin-feed",
+	"version": "0.1.0",
+	"description": "Retrieve unique organic LinkedIn feed posts using session credentials",
+	"license": "UNLICENSED",
+	"keywords": [
+		"n8n-community-node-package",
+		"linkedin",
+		"feed"
+	],
+	"engines": {
+		"node": ">=24.0.0"
+	},
+	"scripts": {
+		"build": "node scripts/clean-dist.mjs && n8n-node build",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"format": "prettier --write nodes credentials tests scripts examples *.json *.mjs README.md",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:live": "node scripts/live-smoke.mjs",
+		"test:install": "node scripts/install-smoke.mjs",
+		"check": "npm run typecheck && npm run lint && npm test && npm run build"
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"examples"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": false,
+		"credentials": [
+			"dist/credentials/LinkedInSessionApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/LinkedInFeed/LinkedInFeed.node.js"
+		]
+	},
+	"dependencies": {
+		"tough-cookie": "6.0.2"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "^2.16.0"
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "0.52.3",
+		"@types/node": "^24.0.0",
+		"eslint": "9.39.4",
+		"n8n-workflow": "2.16.0",
+		"prettier": "3.6.2",
+		"typescript": "5.9.3",
+		"vitest": "5.0.4"
+	}
+}

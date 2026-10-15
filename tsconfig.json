@@ -1,0 +1,20 @@
+{
+	"compilerOptions": {
+		"strict": true,
+		"target": "ES2022",
+		"module": "commonjs",
+		"moduleResolution": "node",
+		"lib": ["ES2022"],
+		"rootDir": ".",
+		"outDir": "dist",
+		"declaration": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"noImplicitReturns": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"skipLibCheck": true,
+		"resolveJsonModule": true
+	},
+	"include": ["nodes/**/*.ts", "nodes/**/*.json", "credentials/**/*.ts"]
+}

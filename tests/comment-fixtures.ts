@@ -39,7 +39,7 @@ export function commentArgs(activityId = '101') {
 	};
 }
 export function commentPage(args: unknown = commentArgs()) {
-	const flight = `1:${JSON.stringify({ requestId: CREATE_COMMENT, requestedArguments: args, onClientRequestFailureAction: { neverExecute: true } })}\n0:["$L1","$L1"]\n`;
+	const flight = `:HL["https://example.invalid/fixture-image.jpg","image",{"fetchPriority":"high"}]\n1:${JSON.stringify({ requestId: CREATE_COMMENT, requestedArguments: args, onClientRequestFailureAction: { neverExecute: true } })}\n0:["$L1","$L1"]\n`;
 	return Buffer.from(
 		`<html><script type="text/javascript" id="rehydrate-data" nonce="fixture">window.__como_rehydration__ = ${JSON.stringify([flight])}</script></html>`,
 	);

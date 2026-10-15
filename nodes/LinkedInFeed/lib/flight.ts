@@ -23,16 +23,38 @@ export class Flight {
 	constructor(bytes: Buffer) {
 		if (!bytes.length || bytes.length > MAX_RESPONSE_BYTES) throw malformed();
 		let position = 0;
+		let rows = 0;
 		while (position < bytes.length) {
+			if (++rows > 100_000) throw malformed();
 			const colon = bytes.indexOf(58, position);
 			if (colon < 0 || colon - position > 12) throw malformed();
 			const id = bytes.subarray(position, colon).toString('ascii');
-			if (!/^[\da-f]+$/.test(id) || this.records.has(id)) throw malformed();
+			const hint = bytes[colon + 1] === 72; // H: resource metadata, not a model record.
+			if (!/^[\da-f]+$/.test(id) && !(hint && id === '')) throw malformed();
+			if (!hint && this.records.has(id)) throw malformed();
 			position = colon + 1;
 			let tag = '';
 			if (bytes[position] >= 65 && bytes[position] <= 90)
 				tag = String.fromCharCode(bytes[position++]);
 			let value: unknown;
+			if (tag === 'H') {
+				// React emits resource hints without an ID (e.g. :HL[...]), or with an
+				// existing ID. They do not define/replace records. Validate framing and
+				// JSON, then discard them; never preload resources or follow hint URLs.
+				let end = bytes.indexOf(10, position);
+				if (end < 0) end = bytes.length;
+				const code = bytes[position];
+				if (!((code >= 65 && code <= 90) || (code >= 97 && code <= 122))) throw malformed();
+				try {
+					JSON.parse(
+						new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(position + 1, end)),
+					);
+				} catch {
+					throw malformed();
+				}
+				position = end + 1;
+				continue;
+			}
 			if (tag === 'T') {
 				const comma = bytes.indexOf(44, position);
 				if (comma < 0 || comma - position > 8) throw malformed();
@@ -64,7 +86,6 @@ export class Flight {
 				else if (tag && tag !== 'I') throw malformed();
 			}
 			this.records.set(id, value);
-			if (this.records.size > 100_000) throw malformed();
 		}
 		if (!this.records.has('0')) throw malformed();
 	}

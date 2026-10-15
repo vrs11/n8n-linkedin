@@ -14,6 +14,40 @@ describe('Flight data reader', () => {
 		expect(reader.resolve('$2')).toEqual({ ok: true });
 	});
 
+	it('ignores anonymous and numbered resource hints without overwriting model records', () => {
+		const reader = new Flight(
+			Buffer.from(
+				[
+					':HL["https://example.invalid/image.jpg","image",{"fetchPriority":"high"}]',
+					'0:{"commentForm":"$1"}',
+					'0:HD"https://example.invalid"',
+					':HC["https://example.invalid", "anonymous"]',
+					'1:{"ok":true}',
+					'1:HL["https://example.invalid/style.css","style"]',
+				].join('\n'),
+			),
+		);
+		expect(reader.root()).toEqual({ commentForm: '$1' });
+		expect(reader.resolve('$1')).toEqual({ ok: true });
+	});
+
+	it.each([
+		'0:{}\n:HLnot-json\n',
+		'0:{}\n:H{}\n',
+		'0:{}\n:HL["unterminated"\n',
+		'0:{}\n:Z{}\n',
+		'0:{}\n: {}\n',
+		'0:{}\ng:HL[]\n',
+		':HL["https://example.invalid"]\n',
+	])('rejects malformed hints and missing model records (%j)', (body) => {
+		expect(() => new Flight(Buffer.from(body))).toThrow('LinkedIn Flight response');
+	});
+
+	it('requires a model record even when a hint mentions the missing reference ID', () => {
+		const reader = new Flight(Buffer.from('0:{"form":"$1"}\n1:HL["https://example.invalid"]\n'));
+		expect(() => reader.resolve('$1')).toThrow('LinkedIn Flight response');
+	});
+
 	it('resolves lazy references, maps, property paths and literal dollar escapes', () => {
 		const reader = new Flight(
 			Buffer.from(

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { IExecuteFunctions } from 'n8n-workflow';
 import { LinkedInComment } from '../nodes/LinkedInComment/LinkedInComment.node';
 import {
@@ -59,7 +60,6 @@ describe('LinkedIn direct comment POST', () => {
 		'urn:li:comment:101',
 		'urn:li:activity:1e5',
 		'urn:li:share:101',
-		'urn:li:ugcPost:101',
 	])('rejects unsupported URNs before credentials or HTTP (%j)', async (urn) => {
 		const ctx = context([urn]);
 		await expect(execute(ctx)).rejects.toThrow('Post URN');
@@ -80,7 +80,7 @@ describe('LinkedIn direct comment POST', () => {
 		const args = body.serverRequest.requestedArguments;
 		const payload = args.payload;
 		const states = body.states;
-		expect(payload.collection.threadUrn.threadUrnActivityThreadUrn.activityUrn.activityId).toBe(
+		expect(payload.collection.threadUrn.threadUrnActivityThreadUrn?.activityUrn.activityId).toBe(
 			'1234567890123456789',
 		);
 		const item = payload.collection.updateKey.items[0];
@@ -125,6 +125,44 @@ describe('LinkedIn direct comment POST', () => {
 		])
 			expect(() => createdComment(bytes, '101')).toThrow(UNKNOWN_OUTCOME);
 	});
+	it('creates UGC comments with the typed thread URN without relabeling it as an activity', async () => {
+		const request = vi.fn().mockResolvedValue(response(commentResult('101', '999', [], 'ugcPost')));
+		const result = await postComment(
+			request,
+			credentials,
+			commentOptions('urn:li:ugcPost:101', options.text, {}),
+		);
+		expect(result).toMatchObject({
+			postUrn: 'urn:li:ugcPost:101',
+			commentUrn: 'urn:li:comment:(ugcPost:101,999)',
+			commentId: '999',
+		});
+		expect(result).not.toHaveProperty('activityUrn');
+		expect(request).toHaveBeenCalledTimes(1);
+		expect(
+			JSON.parse(request.mock.calls[0][0].body).requestedArguments.payload.collection.threadUrn,
+		).toEqual({
+			threadUrnUgcPostThreadUrn: { userGeneratedContentPostUrn: { userGeneratedContentId: '101' } },
+		});
+		expect(() =>
+			createdComment(commentResult('101', '999', [], 'ugcPost'), '101', 'activity'),
+		).toThrow(UNKNOWN_OUTCOME);
+		expect(() => createdComment(commentResult(), '101', 'ugcPost')).toThrow(UNKNOWN_OUTCOME);
+	});
+
+	it('recognizes the real HTTP 200 retry-state failure even when errors is empty', async () => {
+		const rejected = readFileSync(new URL('./fixtures/comment-rejected.rsc', import.meta.url));
+		const request = vi.fn().mockResolvedValue(response(rejected));
+		await expect(postComment(request, credentials, options)).rejects.toThrow(
+			'LinkedIn reported comment submission failure',
+		);
+		expect(request).toHaveBeenCalledTimes(1);
+		const falseRetry = Buffer.from(
+			rejected.toString().replace('"booleanValue":true', '"booleanValue":false'),
+		);
+		expect(() => createdComment(falseRetry, '101')).toThrow('exactly one created comment');
+	});
+
 	it('makes exactly one authenticated POST per item and returns paired confirmed output', async () => {
 		const ctx = context(['urn:li:activity:101', 'urn:li:activity:101']);
 		const [items] = await execute(ctx);
@@ -274,7 +312,7 @@ describe('LinkedIn direct comment POST', () => {
 			expect(request).toHaveBeenCalledTimes(1);
 		},
 	);
-	it('does not substitute share or ugcPost IDs when calling the domain function directly', async () => {
+	it('does not substitute share IDs when calling the domain function directly', async () => {
 		const request = vi.fn();
 		await expect(
 			postComment(request, credentials, { ...options, postUrn: 'urn:li:share:123456789' }),

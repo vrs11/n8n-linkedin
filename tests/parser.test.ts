@@ -71,6 +71,54 @@ describe('feed extraction', () => {
 		expect(post.text).toContain('A post about sponsored research');
 	});
 
+	it('reads sibling updateKey/threadUrn metadata used by the live main feed', () => {
+		const source = card({ id: '101' }) as unknown[];
+		(source[3] as Record<string, unknown>).triggers = [
+			{ requestedArguments: { payload: commentCollection('101', '202').collection } },
+		];
+		expect(parseFeedPage(fixture([source], null)).posts[0]).toMatchObject({
+			urn: 'urn:li:activity:202',
+			feedActivityUrn: 'urn:li:activity:101',
+		});
+	});
+
+	it.each(['collection', 'siblings'])('returns a UGC comment thread from %s metadata', (layout) => {
+		const source = card({ id: '101' }) as unknown[];
+		const collection = {
+			...commentCollection('101', '202').collection,
+			threadUrn: {
+				threadUrnUgcPostThreadUrn: {
+					userGeneratedContentPostUrn: { userGeneratedContentId: '303' },
+				},
+			},
+		};
+		(source[3] as Record<string, unknown>).triggers = [
+			layout === 'collection' ? { collection } : collection,
+		];
+		expect(parseFeedPage(fixture([source], null)).posts[0]).toMatchObject({
+			urn: 'urn:li:ugcPost:303',
+			feedActivityUrn: 'urn:li:activity:101',
+			url: 'https://www.linkedin.com/feed/update/urn:li:ugcPost:303/',
+			engagement: { reactions: 12, comments: 0, reposts: 3 },
+		});
+	});
+
+	it('does not conflate activity and UGC threads with the same numeric ID', () => {
+		const source = card({ id: '101' }) as unknown[];
+		(source[3] as Record<string, unknown>).triggers = [
+			commentCollection('101', '202'),
+			{
+				...commentCollection('101', '202').collection,
+				threadUrn: {
+					threadUrnUgcPostThreadUrn: {
+						userGeneratedContentPostUrn: { userGeneratedContentId: '202' },
+					},
+				},
+			},
+		];
+		expect(() => parseFeedPage(fixture([source], null))).toThrow('changed its feed response');
+	});
+
 	it('does not select comment targets from an embedded or quoted post', () => {
 		const source = card({ id: '101' }) as unknown[];
 		(source[3] as Record<string, unknown>).triggers = [

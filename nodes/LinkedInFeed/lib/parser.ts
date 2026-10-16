@@ -235,11 +235,11 @@ function postIdentity(flight: Flight, props: Data): { urn: string; sponsored: bo
 	return null;
 }
 
-/** A feed/repost activity can display another activity's comment thread. */
+/** A feed/repost activity can display a different activity or UGC comment thread. */
 function commentIdentity(flight: Flight, card: unknown, feedUrn: string): string | null {
 	const targets = new Set<string>();
 	for (const node of objects(flight, card, true)) {
-		const collection = flight.resolve(node.collection);
+		const collection = node.updateKey && node.threadUrn ? node : flight.resolve(node.collection);
 		if (!isObject(collection) || !isObject(collection.updateKey)) continue;
 		const items = flight.resolve(collection.updateKey.items);
 		if (!Array.isArray(items)) continue;
@@ -275,6 +275,18 @@ function commentIdentity(flight: Flight, card: unknown, feedUrn: string): string
 			/^[1-9]\d*$/.test(String(activity))
 		)
 			targets.add(`urn:li:activity:${activity}`);
+		const ugcThread = isObject(thread)
+			? flight.resolve(thread.threadUrnUgcPostThreadUrn)
+			: undefined;
+		const ugcUrn = isObject(ugcThread)
+			? flight.resolve(ugcThread.userGeneratedContentPostUrn)
+			: undefined;
+		const ugcId = isObject(ugcUrn) ? ugcUrn.userGeneratedContentId : undefined;
+		if (
+			(typeof ugcId === 'string' || (typeof ugcId === 'number' && Number.isSafeInteger(ugcId))) &&
+			/^[1-9]\d*$/.test(String(ugcId))
+		)
+			targets.add(`urn:li:ugcPost:${ugcId}`);
 	}
 	if (targets.size > 1) throw fail();
 	return targets.size ? [...targets][0] : null;

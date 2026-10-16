@@ -34,7 +34,7 @@ export interface PaginationPayload {
 
 export interface FeedPost {
 	urn: string;
-	/** Present when a feed/repost activity differs from the displayed post comment thread. */
+	/** Present when a feed/repost activity differs from the displayed post comment thread (activity or ugcPost). */
 	feedActivityUrn?: string;
 	url: string;
 	text: string;

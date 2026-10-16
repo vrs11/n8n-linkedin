@@ -28,25 +28,28 @@ export interface CommentOptions {
 }
 export interface CreatedComment {
 	postUrn: string;
-	activityUrn: string;
+	activityUrn?: string;
 	commentUrn: string;
 	commentId: string;
 	text: string;
 	postUrl: string;
 }
 
-function activityIdFromUrn(value: unknown): string {
+type ThreadType = 'activity' | 'ugcPost';
+function postIdentity(value: unknown): { type: ThreadType; id: string } {
 	const match =
-		typeof value === 'string' ? /^urn:li:activity:([1-9]\d{0,19})$/.exec(value.trim()) : null;
+		typeof value === 'string'
+			? /^urn:li:(activity|ugcPost):([1-9]\d{0,19})$/.exec(value.trim())
+			: null;
 	if (!match)
 		throw new LinkedInFeedError(
-			'Post URN must be an activity URN, for example urn:li:activity:123456789. Use the urn returned by LinkedIn Feed; share and ugcPost IDs are different and cannot be substituted.',
+			'Post URN must be an activity URN or ugcPost URN returned by LinkedIn Feed. Share IDs cannot be substituted.',
 		);
-	return match[1];
+	return { type: match[1] as ThreadType, id: match[2] };
 }
 
 export function commentOptions(postUrn: unknown, text: unknown, options: unknown): CommentOptions {
-	const activityId = activityIdFromUrn(postUrn);
+	const target = postIdentity(postUrn);
 	if (
 		typeof text !== 'string' ||
 		!text.trim() ||
@@ -61,7 +64,7 @@ export function commentOptions(postUrn: unknown, text: unknown, options: unknown
 	if (!isObject(options))
 		throw new LinkedInFeedError('Options must be a collection of named settings.');
 	return {
-		postUrn: `urn:li:activity:${activityId}`,
+		postUrn: `urn:li:${target.type}:${target.id}`,
 		text,
 		timeout: positiveInteger(
 			options.timeout === undefined ? 25000 : options.timeout,
@@ -70,10 +73,15 @@ export function commentOptions(postUrn: unknown, text: unknown, options: unknown
 	};
 }
 
-/** One self-contained SDUI POST, generated from the activity ID and plain text. */
-export function commentBody(activityId: string, text: string, now = Date.now()) {
-	if (!/^[1-9]\d{0,19}$/.test(activityId))
-		throw new LinkedInFeedError('Invalid LinkedIn activity ID.');
+/** One self-contained SDUI POST, generated from the comment thread and plain text. */
+export function commentBody(
+	threadId: string,
+	text: string,
+	now = Date.now(),
+	threadType: ThreadType = 'activity',
+) {
+	if (!/^[1-9]\d{0,19}$/.test(threadId))
+		throw new LinkedInFeedError('Invalid LinkedIn comment thread ID.');
 	const stateId = `n8n-${randomUUID()}`;
 	const bindingValues = Object.fromEntries(
 		bindings.map(([name, prefix]) => [name, { key: `${prefix}-${stateId}`, namespace }]),
@@ -81,11 +89,12 @@ export function commentBody(activityId: string, text: string, now = Date.now()) 
 	const payload = {
 		optimisticKey: `auto-component-${randomUUID()}`,
 		collection: {
+			// A local UI collection key; threadUrn below selects the server-side comment target.
 			updateKey: {
 				feedType: 3,
 				items: [
 					{
-						feedUpdateUrn: { updateUrnActivityUrn: { activityUrn: { activityId } } },
+						feedUpdateUrn: { updateUrnActivityUrn: { activityUrn: { activityId: threadId } } },
 						trackingId: randomBytes(16).toString('base64'),
 					},
 				],
@@ -93,7 +102,14 @@ export function commentBody(activityId: string, text: string, now = Date.now()) 
 				aggregationReasonTypes: [],
 				isVideoCarousel: false,
 			},
-			threadUrn: { threadUrnActivityThreadUrn: { activityUrn: { activityId } } },
+			threadUrn:
+				threadType === 'activity'
+					? { threadUrnActivityThreadUrn: { activityUrn: { activityId: threadId } } }
+					: {
+							threadUrnUgcPostThreadUrn: {
+								userGeneratedContentPostUrn: { userGeneratedContentId: threadId },
+							},
+						},
 		},
 		...bindingValues,
 	};
@@ -146,7 +162,8 @@ export function commentBody(activityId: string, text: string, now = Date.now()) 
 
 export function createdComment(
 	bytes: Buffer,
-	activityId: string,
+	threadId: string,
+	threadType: ThreadType = 'activity',
 ): { commentUrn: string; commentId: string } {
 	const flight = new Flight(bytes);
 	const root = flight.root();
@@ -164,6 +181,28 @@ export function createdComment(
 		throw new LinkedInFeedError(
 			`LinkedIn returned no comment completion actions. ${UNKNOWN_OUTCOME}`,
 		);
+	// A 200 response can explicitly report that the write failed without response.errors.
+	for (const ref of completion.actions) {
+		const action = flight.resolve(ref);
+		if (!isObject(action) || action.$type !== 'proto.sdui.actions.core.SetState') continue;
+		const value = flight.resolve(action.value);
+		const state = isObject(value) ? flight.resolve(value.state) : undefined;
+		const binding = isObject(state) ? flight.resolve(state.key) : undefined;
+		const key = isObject(binding) ? flight.resolve(binding.key) : undefined;
+		const id = isObject(key) ? flight.resolve(key.value) : undefined;
+		const result = isObject(state) ? flight.resolve(state.value) : undefined;
+		if (
+			isObject(id) &&
+			typeof id.id === 'string' &&
+			id.id.startsWith('optimisticCommentShowRetry-') &&
+			isObject(result) &&
+			result.$case === 'booleanValue' &&
+			result.booleanValue === true
+		)
+			throw new LinkedInFeedError(
+				`LinkedIn reported comment submission failure. Refresh the Feed output to obtain the post's comment-thread URN. ${UNKNOWN_OUTCOME}`,
+			);
+	}
 	const identities = new Map<string, string>();
 	for (const ref of completion.actions) {
 		const action = flight.resolve(ref);
@@ -175,14 +214,17 @@ export function createdComment(
 			const component = flight.resolve(ref);
 			const match =
 				isObject(component) && typeof component.semanticId === 'string'
-					? /^urn:li:comment:\(activity:([1-9]\d*),([1-9]\d*)\)$/.exec(component.semanticId)
+					? /^urn:li:comment:\((activity|ugcPost):([1-9]\d*),([1-9]\d*)\)$/.exec(
+							component.semanticId,
+						)
 					: null;
-			if (match && match[1] === activityId) identities.set(match[0], match[2]);
+			if (match && match[1] === threadType && match[2] === threadId)
+				identities.set(match[0], match[3]);
 		}
 	}
 	if (identities.size !== 1)
 		throw new LinkedInFeedError(
-			`LinkedIn did not identify exactly one created comment in the requested activity thread. ${UNKNOWN_OUTCOME}`,
+			`LinkedIn did not identify exactly one created comment in the requested comment thread. ${UNKNOWN_OUTCOME}`,
 		);
 	const [commentUrn, commentId] = [...identities.entries()][0];
 	return { commentUrn, commentId };
@@ -263,12 +305,12 @@ export async function postComment(
 	signal?: AbortSignal,
 ): Promise<CreatedComment> {
 	// Constructing a session validates credentials before any request or write begins.
-	const activityId = activityIdFromUrn(options.postUrn);
+	const target = postIdentity(options.postUrn);
 	const session = new LinkedInSession(http, credentials);
 	const postUrl = `https://www.linkedin.com/feed/update/${options.postUrn}/`;
 	if (signal?.aborted)
 		throw new LinkedInFeedError('LinkedIn comment creation was cancelled before submission.');
-	const body = commentBody(activityId, options.text);
+	const body = commentBody(target.id, options.text, Date.now(), target.type);
 	let response: unknown;
 	try {
 		response = await session.request(ENDPOINT, 'POST', options.timeout, signal, body);
@@ -283,7 +325,7 @@ export async function postComment(
 	const { bytes, status } = responseBody(response);
 	let result: ReturnType<typeof createdComment>;
 	try {
-		result = createdComment(bytes, activityId);
+		result = createdComment(bytes, target.id, target.type);
 	} catch (error) {
 		const reason = error instanceof LinkedInFeedError ? error.message : UNKNOWN_OUTCOME;
 		throw new LinkedInFeedError(
@@ -292,7 +334,7 @@ export async function postComment(
 	}
 	return {
 		postUrn: options.postUrn,
-		activityUrn: `urn:li:activity:${activityId}`,
+		...(target.type === 'activity' ? { activityUrn: options.postUrn } : {}),
 		...result,
 		text: options.text,
 		postUrl,

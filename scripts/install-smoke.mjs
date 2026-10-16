@@ -87,6 +87,7 @@ try {
 	let responseBody = fixture;
 	let responseStatus = 200;
 	let requests = 0;
+	let commentResponseOverride;
 	const additionalData = {
 		executionId: 'fixture',
 		timezone: 'UTC',
@@ -108,11 +109,21 @@ try {
 				'LinkedIn nodes must only send their direct POST requests',
 			);
 			if (options.url.includes('comments.createComment')) {
-				assert.equal(JSON.parse(options.body).states[0].value, 'Fixture comment');
+				const body = JSON.parse(options.body);
+				assert.equal(body.states[0].value, 'Fixture comment');
+				const ugc =
+					!!body.requestedArguments.payload.collection.threadUrn.threadUrnUgcPostThreadUrn;
 				return {
 					statusCode: 200,
 					headers: { 'content-type': 'application/octet-stream' },
-					body: readFileSync(new URL('../tests/fixtures/comment-created.rsc', import.meta.url)),
+					body:
+						commentResponseOverride ??
+						Buffer.from(
+							readFileSync(
+								new URL('../tests/fixtures/comment-created.rsc', import.meta.url),
+								'utf8',
+							).replaceAll('activity:101', ugc ? 'ugcPost:101' : 'activity:101'),
+						),
 				};
 			}
 			assert.equal(JSON.parse(options.body).clientArguments.payload.startIndex, 0);
@@ -439,32 +450,36 @@ try {
 			credentials: { linkedInSessionApi: { id: 'fixture', name: 'fixture' } },
 			parameters: { postUrn: '={{ $json.urn }}', text: '={{ $json.comment }}', options: {} },
 		};
-		for (const mode of ['manual', 'trigger', 'integrated']) {
-			const workflow = makeWorkflow(base, definition);
-			const run = freshRun();
-			const data = {
-				node: workflow.getNode('Comment'),
-				data: { main: [[{ json: { urn: 'urn:li:activity:101', comment: 'Fixture comment' } }]] },
-				source: { main: [null] },
-			};
-			const beforeCommentRequests = requests;
-			const result = await new WorkflowExecute(additionalData, mode, run).runNode(
-				workflow,
-				data,
-				run,
-				0,
-				additionalData,
-				mode,
-			);
-			assert.equal(
-				requests - beforeCommentRequests,
-				1,
-				'One comment must use exactly one HTTP request',
-			);
-			assert.equal(result.data[0][0].json.commentUrn, 'urn:li:comment:(activity:101,999)');
-			assert.equal(result.data[0][0].json.postUrn, 'urn:li:activity:101');
-			assert.deepEqual(result.data[0][0].pairedItem, { item: 0 });
-			commentCompatibilityCases++;
+		for (const threadType of ['activity', 'ugcPost']) {
+			for (const mode of ['manual', 'trigger', 'integrated']) {
+				const workflow = makeWorkflow(base, definition);
+				const run = freshRun();
+				const data = {
+					node: workflow.getNode('Comment'),
+					data: {
+						main: [[{ json: { urn: `urn:li:${threadType}:101`, comment: 'Fixture comment' } }]],
+					},
+					source: { main: [null] },
+				};
+				const beforeCommentRequests = requests;
+				const result = await new WorkflowExecute(additionalData, mode, run).runNode(
+					workflow,
+					data,
+					run,
+					0,
+					additionalData,
+					mode,
+				);
+				assert.equal(
+					requests - beforeCommentRequests,
+					1,
+					'One comment must use exactly one HTTP request',
+				);
+				assert.equal(result.data[0][0].json.commentUrn, `urn:li:comment:(${threadType}:101,999)`);
+				assert.equal(result.data[0][0].json.postUrn, `urn:li:${threadType}:101`);
+				assert.deepEqual(result.data[0][0].pairedItem, { item: 0 });
+				commentCompatibilityCases++;
+			}
 		}
 		const converted = convertNodeToAiTool({ description: structuredClone(base.description) });
 		converted.execute = base.execute;
@@ -491,6 +506,24 @@ try {
 		);
 		assert.equal(result[0].commentUrn, 'urn:li:comment:(activity:101,999)');
 		commentCompatibilityCases++;
+		const ugcResult = JSON.parse(
+			await dynamic.tool.invoke({ postUrn: 'urn:li:ugcPost:101', text: 'Fixture comment' }),
+		);
+		assert.equal(ugcResult[0].commentUrn, 'urn:li:comment:(ugcPost:101,999)');
+		assert.equal(ugcResult[0].activityUrn, undefined);
+		commentCompatibilityCases++;
+		commentResponseOverride = readFileSync(
+			new URL('../tests/fixtures/comment-rejected.rsc', import.meta.url),
+		);
+		const beforeRejected = requests;
+		await assert.rejects(
+			dynamic.tool.invoke({ postUrn: 'urn:li:activity:101', text: 'Fixture comment' }),
+			/comment submission failure/,
+		);
+		assert.equal(requests - beforeRejected, 1, 'A rejected write must never be retried');
+		commentResponseOverride = undefined;
+		commentCompatibilityCases++;
+
 		const before = requests;
 		for (const args of [
 			{ input: 'leave a comment' },

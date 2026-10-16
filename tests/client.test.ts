@@ -192,6 +192,52 @@ describe('session transport', () => {
 });
 
 describe('collection', () => {
+	it('keeps empty text by default and excludes empty and whitespace-only text when enabled', async () => {
+		const result = parseFeedPage(
+			fixture([card({ id: '101', image: true }), card({ id: '102' }), card({ id: '103' })], null),
+		);
+		result.posts[0].text = '';
+		result.posts[1].text = ' \t\n\u00a0';
+		const page = vi.fn().mockResolvedValue(result);
+		expect(await collectPosts({ page }, DEFAULT_OPTIONS)).toHaveLength(3);
+		const posts = await collectPosts({ page }, { ...DEFAULT_OPTIONS, excludeEmptyText: true });
+		expect(posts.map((post) => post.urn)).toEqual(['urn:li:activity:103']);
+		expect(posts[0].text).toBe(result.posts[2].text);
+	});
+
+	it('paginates past empty text and combines filters before counting or remembering identities', async () => {
+		const first = parseFeedPage(fixture([card({ id: '101' })]));
+		first.posts[0].text = '';
+		const second = parseFeedPage(
+			fixture(
+				[
+					card({ id: '101' }),
+					card({ id: '102', company: true }),
+					card({ id: '103' }),
+					card({ id: '104' }),
+				],
+				null,
+			),
+		);
+		const page = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+		const posts = await collectPosts(
+			{ page },
+			{ ...DEFAULT_OPTIONS, limit: 2, excludeEmptyText: true, excludeCompanies: true },
+		);
+		expect(posts.map((post) => post.urn)).toEqual(['urn:li:activity:101', 'urn:li:activity:103']);
+		expect(page).toHaveBeenCalledTimes(2);
+	});
+
+	it('returns no posts when the feed exhausts with only empty text', async () => {
+		const result = parseFeedPage(fixture([card({ id: '101' })], null));
+		result.posts[0].text = '';
+		const page = vi.fn().mockResolvedValue(result);
+		expect(await collectPosts({ page }, { ...DEFAULT_OPTIONS, excludeEmptyText: true })).toEqual(
+			[],
+		);
+		expect(page).toHaveBeenCalledTimes(1);
+	});
+
 	it('includes personal profiles on localized LinkedIn hosts when filtering companies', async () => {
 		const page = vi.fn().mockResolvedValue(
 			parseFeedPage(

@@ -10,6 +10,7 @@ export interface CollectionOptions {
 	maxPages: number;
 	maxRetries: number;
 	excludeCompanies: boolean;
+	excludeEmptyText: boolean;
 }
 
 export const DEFAULT_OPTIONS: CollectionOptions = {
@@ -18,6 +19,7 @@ export const DEFAULT_OPTIONS: CollectionOptions = {
 	maxPages: 100,
 	maxRetries: 2,
 	excludeCompanies: false,
+	excludeEmptyText: false,
 };
 
 export interface PaginationPayload {
@@ -32,6 +34,8 @@ export interface PaginationPayload {
 
 export interface FeedPost {
 	urn: string;
+	/** Present when a feed/repost activity differs from the displayed post comment thread. */
+	feedActivityUrn?: string;
 	url: string;
 	text: string;
 	author: { name: string | null; url: string | null; headline: string | null };
@@ -77,6 +81,9 @@ export function validateOptions(options: unknown): asserts options is Collection
 	const values = options as Record<string, unknown>;
 	if (typeof values.excludeCompanies !== 'boolean') {
 		throw new LinkedInFeedError('Exclude Companies must be a boolean.');
+	}
+	if (typeof values.excludeEmptyText !== 'boolean') {
+		throw new LinkedInFeedError('Exclude Empty Text must be a boolean.');
 	}
 	positiveInteger(values.limit, 'Limit');
 	positiveInteger(values.timeout, 'Request Timeout');

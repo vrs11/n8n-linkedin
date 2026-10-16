@@ -70,6 +70,14 @@ export class LinkedInFeed implements INodeType {
 							'Whether to return only posts with an identifiable personal profile as the author, skipping companies and unknown authors. Limit counts only matching posts.',
 					},
 					{
+						displayName: 'Exclude Empty Text',
+						name: 'excludeEmptyText',
+						type: 'boolean',
+						default: DEFAULT_OPTIONS.excludeEmptyText,
+						description:
+							'Whether to skip posts with empty or whitespace-only text, including media-only posts. Limit counts only matching posts.',
+					},
+					{
 						displayName: 'Maximum Pages',
 						name: 'maxPages',
 						type: 'number',

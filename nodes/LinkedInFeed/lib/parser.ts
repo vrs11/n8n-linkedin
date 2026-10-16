@@ -235,6 +235,51 @@ function postIdentity(flight: Flight, props: Data): { urn: string; sponsored: bo
 	return null;
 }
 
+/** A feed/repost activity can display another activity's comment thread. */
+function commentIdentity(flight: Flight, card: unknown, feedUrn: string): string | null {
+	const targets = new Set<string>();
+	for (const node of objects(flight, card, true)) {
+		const collection = flight.resolve(node.collection);
+		if (!isObject(collection) || !isObject(collection.updateKey)) continue;
+		const items = flight.resolve(collection.updateKey.items);
+		if (!Array.isArray(items)) continue;
+		// Scope the thread to this card's update, excluding embedded/quoted posts.
+		const ownsUpdate = items.some((ref) => {
+			const item = flight.resolve(ref);
+			const update =
+				isObject(item) && isObject(item.feedUpdateUrn)
+					? item.feedUpdateUrn.updateUrnActivityUrn
+					: undefined;
+			const activity =
+				isObject(update) && isObject(update.activityUrn)
+					? update.activityUrn.activityId
+					: undefined;
+			return (
+				(typeof activity === 'string' ||
+					(typeof activity === 'number' && Number.isSafeInteger(activity))) &&
+				`urn:li:activity:${activity}` === feedUrn
+			);
+		});
+		if (!ownsUpdate) continue;
+		const thread = flight.resolve(collection.threadUrn);
+		const activityThread = isObject(thread)
+			? flight.resolve(thread.threadUrnActivityThreadUrn)
+			: undefined;
+		const activity =
+			isObject(activityThread) && isObject(activityThread.activityUrn)
+				? activityThread.activityUrn.activityId
+				: undefined;
+		if (
+			(typeof activity === 'string' ||
+				(typeof activity === 'number' && Number.isSafeInteger(activity))) &&
+			/^[1-9]\d*$/.test(String(activity))
+		)
+			targets.add(`urn:li:activity:${activity}`);
+	}
+	if (targets.size > 1) throw fail();
+	return targets.size ? [...targets][0] : null;
+}
+
 function media(flight: Flight, card: unknown): FeedPost['media'] {
 	const result: FeedPost['media'] = [];
 	const add = (item: FeedPost['media'][number]) => {
@@ -292,6 +337,7 @@ function parsePost(flight: Flight, card: unknown, states: Map<string, unknown>):
 	}
 	if (identity.sponsored) return null;
 	if (!updates.length) throw fail();
+	const urn = commentIdentity(flight, card, identity.urn) ?? identity.urn;
 	const actors = regions(flight, card, 'feed-actor');
 	const actor = actors[0];
 	const actorTextBlocks = actor
@@ -313,8 +359,10 @@ function parsePost(flight: Flight, card: unknown, states: Map<string, unknown>):
 		? (links(flight, actor).find((url) => authorType(url) !== null) ?? null)
 		: null;
 	const engagement = (prefix: string, region: string): number | null => {
-		const initial = count(initialValue(states.get(`${prefix}-${identity.urn}`), states));
-		if (initial !== null) return initial;
+		for (const activityUrn of new Set([urn, identity.urn])) {
+			const initial = count(initialValue(states.get(`${prefix}-${activityUrn}`), states));
+			if (initial !== null) return initial;
+		}
 		for (const node of regions(flight, card, region)) {
 			for (const binding of objects(flight, node)) {
 				const value = count(initialValue(states.get(String(binding.stateKey)), states));
@@ -324,8 +372,9 @@ function parsePost(flight: Flight, card: unknown, states: Map<string, unknown>):
 		return null;
 	};
 	return {
-		urn: identity.urn,
-		url: `https://www.linkedin.com/feed/update/${identity.urn}/`,
+		urn,
+		...(urn !== identity.urn ? { feedActivityUrn: identity.urn } : {}),
+		url: `https://www.linkedin.com/feed/update/${urn}/`,
 		text: initialText(flight, regions(flight, card, 'feed-commentary')),
 		author: { name: name || null, url: authorUrl, headline },
 		publication: { publishedAt: null, label: publication || null },

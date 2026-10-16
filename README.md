@@ -82,12 +82,15 @@ Chat-model adapters must preserve the tool's schema when advertising it to their
 
 For people-only posts, add **Options → Exclude Companies** and enable it. The node identifies personal profiles from the post author's LinkedIn profile URL, skips company and unidentified authors, and keeps paginating until it reaches Limit or the feed ends. Company mentions in a person's post do not exclude that post. This option is also available on **LinkedIn Feed Tool**.
 
+To skip posts without text, enable **Options → Exclude Empty Text** in **LinkedIn Feed** or **LinkedIn Feed Tool**. It excludes empty and whitespace-only text, including media-only posts. It defaults to off and can be combined with Exclude Companies. Limit counts only posts that pass both filters, so the node keeps paginating as needed until the feed ends or Maximum Pages is reached.
+
 Each incoming item starts a new recent-first collection. Each returned post links back to its corresponding input item through `pairedItem`. Sponsored cards and non-post upsells are excluded; organic company posts remain eligible by default. Duplicate post URNs are removed while preserving feed order.
 
 | Option               | Default | Behavior                                                           |
 | -------------------- | ------- | ------------------------------------------------------------------ |
 | Limit                | 20      | Positive safe integer; requested unique organic posts              |
 | Exclude Companies    | false   | Return only identifiable people posts; Limit counts matching posts |
+| Exclude Empty Text   | false   | Skip empty or whitespace-only text; Limit counts matching posts    |
 | Maximum Pages        | 100     | Fails when reached while additional posts are still needed         |
 | Maximum Retries      | 2       | Retries per page; configurable from 0 to 10                        |
 | Request Timeout (Ms) | 25000   | Timeout for each HTTP request                                      |
@@ -113,6 +116,8 @@ Transient connection failures and HTTP `429`, `502`, `503`, and `504` use bounde
 	"engagement": { "reactions": 12, "comments": 0, "reposts": 3 }
 }
 ```
+
+For feed/repost entries, `urn` and `url` use the displayed post's comment-thread activity when LinkedIn supplies an explicit target for that feed update. If it differs from the surrounding activity, `feedActivityUrn` preserves the surrounding ID. This also deduplicates the same post shown through different feed activities. Refresh saved feed results after updating; older surrounding activity IDs may not accept comments.
 
 Unavailable scalar metadata is `null`; missing media is `[]`. Post text can be empty for media-only or article-only posts. Media contains available URLs and metadata, rather than downloaded files. Absolute publication timestamps are not inferred from relative labels or activity IDs; the current feed provides a publication label. Reaction counts read only supported initial binding expressions; unrecognized expressions yield `null`.
 
@@ -158,6 +163,6 @@ The tool expects an object such as `{"postUrn":"urn:li:activity:123456789","text
 
 A successful result contains `postUrn`, resolved `activityUrn`, `commentUrn`, `commentId`, the submitted `text`, and `postUrl`. Success requires LinkedIn's server response to identify the created comment in the expected activity thread. Request Timeout defaults to 25,000 ms per request.
 
-Comment submissions are sent **once**, without automatic retries. A timeout, HTTP 500, cancellation during submission, or malformed response can occur after LinkedIn has already created the comment. Such errors tell you to check the post before retrying. n8n's **Retry On Fail**, manual workflow reruns, and repeated agent calls can still create duplicates; these are separate invocations. Continue On Fail returns a paired error for the affected item; cancellation stops the execution.
+Comment submissions are sent **once**, without automatic retries. A timeout, HTTP 500, cancellation during submission, or malformed response can occur after LinkedIn has already created the comment. Errors retain the HTTP status, supported network error code, or confirmation failure stage without exposing cookies or response bodies, and tell you to check the post before retrying. n8n's **Retry On Fail**, manual workflow reruns, and repeated agent calls can still create duplicates; these are separate invocations. Continue On Fail returns a paired error for the affected item; cancellation stops the execution.
 
 This uses LinkedIn's browser session/SDUI HTTP endpoint. The node generates the complete JSON request locally, including independent state and tracking IDs for each invocation. It does not fetch post pages, inspect forms, or require a browser. The server response supplies the created comment URN; unavailable posts and disabled comments are handled through that response. The protocol can change. Rebuild, reinstall the package copy if applicable, and restart n8n and its workers to load the new node.

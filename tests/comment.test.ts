@@ -9,7 +9,10 @@ import {
 	UNKNOWN_OUTCOME,
 } from '../nodes/LinkedInComment/lib/comment';
 import { commentResult } from './comment-fixtures';
-import { credentials, response } from './fixtures';
+import { credentials, response, card, fixture } from './fixtures';
+import { parseFeedPage } from '../nodes/LinkedInFeed/lib/parser';
+import { collectPosts, LinkedInClient } from '../nodes/LinkedInFeed/lib/client';
+import { DEFAULT_OPTIONS } from '../nodes/LinkedInFeed/lib/types';
 
 const options = commentOptions('urn:li:activity:101', 'First line\nCafé 🚀', {});
 function context(urns: unknown[] = ['urn:li:activity:101'], continueOnFail = false) {
@@ -152,6 +155,112 @@ describe('LinkedIn direct comment POST', () => {
 			expect(request).toHaveBeenCalledTimes(1);
 		},
 	);
+	it.each([401, 403, 429, 500])(
+		'preserves HTTP %s instead of discarding the failure reason',
+		async (status) => {
+			const request = vi.fn().mockResolvedValue(response(Buffer.from('server-secret'), status));
+			await expect(postComment(request, credentials, options)).rejects.toThrow(`HTTP ${status}`);
+			expect(request).toHaveBeenCalledTimes(1);
+		},
+	);
+
+	it.each(['ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND'])(
+		'reports safe network failure codes (%s)',
+		async (code) => {
+			const request = vi
+				.fn()
+				.mockRejectedValue(Object.assign(new Error('test-session-secret'), { code }));
+			await expect(postComment(request, credentials, options)).rejects.toThrow(code);
+			await expect(postComment(request, credentials, options)).rejects.not.toThrow(
+				'test-session-secret',
+			);
+		},
+	);
+
+	it('does not expose arbitrary transport codes or messages', async () => {
+		const request = vi.fn().mockRejectedValue({
+			code: 'test-session-secret',
+			message: 'test-session-secret',
+			cause: { code: 'another-secret' },
+		});
+		await expect(postComment(request, credentials, options)).rejects.toThrow(
+			'before a response was received',
+		);
+		await expect(postComment(request, credentials, options)).rejects.not.toThrow('secret');
+	});
+
+	it('distinguishes an HTML verification page from missing completion actions', async () => {
+		const html = vi.fn().mockResolvedValue(response(Buffer.from('<html>server-secret</html>')));
+		await expect(postComment(html, credentials, options)).rejects.toThrow(
+			'HTML instead of a comment confirmation (HTTP 200)',
+		);
+		const missing = vi
+			.fn()
+			.mockResolvedValue(response(Buffer.from('0:{"response":{"errors":[]}}\n')));
+		await expect(postComment(missing, credentials, options)).rejects.toThrow(
+			'no comment completion actions',
+		);
+	});
+
+	it('distinguishes server rejections from malformed Flight without leaking response contents', async () => {
+		const server = vi
+			.fn()
+			.mockResolvedValue(response(commentResult('101', '999', [{ message: 'server-secret' }])));
+		await expect(postComment(server, credentials, options)).rejects.toThrow('1 server error(s)');
+		await expect(postComment(server, credentials, options)).rejects.not.toThrow('server-secret');
+		const malformed = vi.fn().mockResolvedValue(response(Buffer.from('server-secret')));
+		await expect(postComment(malformed, credentials, options)).rejects.toThrow('HTTP 200');
+		await expect(postComment(malformed, credentials, options)).rejects.not.toThrow('server-secret');
+	});
+
+	it('passes the displayed post activity from feed output to one direct comment POST', async () => {
+		const source = card({ id: '101' }) as unknown[];
+		(source[3] as Record<string, unknown>).triggers = [
+			{
+				value: {
+					requestedArguments: {
+						payload: {
+							collection: {
+								updateKey: {
+									items: [
+										{
+											feedUpdateUrn: {
+												updateUrnActivityUrn: { activityUrn: { activityId: '101' } },
+											},
+										},
+									],
+								},
+								threadUrn: { threadUrnActivityThreadUrn: { activityUrn: { activityId: '202' } } },
+							},
+						},
+					},
+				},
+			},
+		];
+		const feed = fixture([source, card({ id: '202' })], null);
+		expect(parseFeedPage(feed).posts[0].feedActivityUrn).toBe('urn:li:activity:101');
+		const feedHttp = vi.fn().mockResolvedValue(response(feed));
+		const feedOptions = { ...DEFAULT_OPTIONS, limit: 2 };
+		const posts = await collectPosts(
+			new LinkedInClient(feedHttp, credentials, feedOptions),
+			feedOptions,
+		);
+		expect(posts).toHaveLength(1); // Repost and original refer to the same post.
+		const commentHttp = vi.fn().mockResolvedValue(response(commentResult('202')));
+		const result = await postComment(
+			commentHttp,
+			credentials,
+			commentOptions(posts[0].urn, 'Fixture comment', {}),
+		);
+		expect(result.commentUrn).toBe('urn:li:comment:(activity:202,999)');
+		expect(commentHttp).toHaveBeenCalledTimes(1);
+		const sent = JSON.parse(commentHttp.mock.calls[0][0].body);
+		expect(
+			sent.serverRequest.requestedArguments.payload.collection.threadUrn.threadUrnActivityThreadUrn
+				.activityUrn.activityId,
+		).toBe('202');
+	});
+
 	it('does not leak transport errors or retry after a lost write response', async () => {
 		const request = vi.fn().mockRejectedValue(new Error('test-session-secret'));
 		await expect(postComment(request, credentials, options)).rejects.toThrow(UNKNOWN_OUTCOME);

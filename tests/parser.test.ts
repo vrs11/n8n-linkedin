@@ -36,6 +36,87 @@ describe('feed extraction', () => {
 		expect(() => parseFeedPage(fixture([source], null))).toThrow('changed its feed response');
 	});
 
+	function commentCollection(owner: string, target: unknown) {
+		return {
+			collection: {
+				updateKey: {
+					items: [
+						{ feedUpdateUrn: { updateUrnActivityUrn: { activityUrn: { activityId: owner } } } },
+					],
+				},
+				threadUrn: { threadUrnActivityThreadUrn: { activityUrn: { activityId: target } } },
+			},
+		};
+	}
+
+	it('returns the actual comment activity instead of the surrounding feed/repost activity', () => {
+		const source = card({ id: '101' }) as unknown[];
+		const props = source[3] as Record<string, unknown>;
+		props.triggers = [
+			{
+				action: {
+					actions: [
+						{ value: { requestedArguments: { payload: commentCollection('101', '202') } } },
+					],
+				},
+			},
+		];
+		const post = parseFeedPage(fixture([source], null)).posts[0];
+		expect(post).toMatchObject({
+			urn: 'urn:li:activity:202',
+			feedActivityUrn: 'urn:li:activity:101',
+			url: 'https://www.linkedin.com/feed/update/urn:li:activity:202/',
+			engagement: { reactions: 12, comments: 0, reposts: 3 },
+		});
+		expect(post.text).toContain('A post about sponsored research');
+	});
+
+	it('does not select comment targets from an embedded or quoted post', () => {
+		const source = card({ id: '101' }) as unknown[];
+		(source[3] as Record<string, unknown>).triggers = [
+			commentCollection('303', '404'),
+			commentCollection('101', '202'),
+		];
+		expect(parseFeedPage(fixture([source], null)).posts[0].urn).toBe('urn:li:activity:202');
+	});
+
+	it('keeps the feed activity if no root-comment target is available for that update', () => {
+		const source = card({ id: '101' }) as unknown[];
+		(source[3] as Record<string, unknown>).triggers = [
+			commentCollection('303', '404'),
+			{
+				collection: {
+					...commentCollection('101', '202').collection,
+					threadUrn: {
+						threadUrnCommentThreadUrn: {
+							commentUrn: { thread: 'urn:li:activity:202', commentId: '999' },
+						},
+					},
+				},
+			},
+		];
+		const post = parseFeedPage(fixture([source], null)).posts[0];
+		expect(post.urn).toBe('urn:li:activity:101');
+		expect(post).not.toHaveProperty('feedActivityUrn');
+	});
+
+	it('does not guess when one feed activity contains conflicting root-comment targets', () => {
+		const source = card({ id: '101' }) as unknown[];
+		(source[3] as Record<string, unknown>).triggers = [
+			commentCollection('101', '202'),
+			commentCollection('101', '303'),
+		];
+		expect(() => parseFeedPage(fixture([source], null))).toThrow('changed its feed response');
+	});
+
+	it('does not round an unsafe numeric comment activity into the wrong target', () => {
+		const source = card({ id: '101' }) as unknown[];
+		(source[3] as Record<string, unknown>).triggers = [
+			commentCollection('101', Number.MAX_SAFE_INTEGER + 1),
+		];
+		expect(parseFeedPage(fixture([source], null)).posts[0].urn).toBe('urn:li:activity:101');
+	});
+
 	it('bounds text expansion when a compact Flight graph repeats shared branches', () => {
 		const source = card({ id: '101' }) as unknown[];
 		(source[3] as Record<string, unknown>).children = tracked(

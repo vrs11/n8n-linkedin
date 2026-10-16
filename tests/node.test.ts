@@ -2,7 +2,7 @@ import type { IExecuteFunctions, ICredentialTestFunctions } from 'n8n-workflow';
 import { describe, expect, it, vi } from 'vitest';
 import { LinkedInFeed } from '../nodes/LinkedInFeed/LinkedInFeed.node';
 import { LinkedInSessionApi } from '../credentials/LinkedInSessionApi.credentials';
-import { card, credentials, fixture, response } from './fixtures';
+import { card, credentials, element, fixture, response, tracked } from './fixtures';
 
 function context(limits: unknown[] = [1], continueOnFail = false, options: unknown = {}) {
 	return {
@@ -104,6 +104,21 @@ describe('n8n adapter', () => {
 			new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions),
 		).rejects.toThrow('cancelled');
 		expect(ctx.helpers.httpRequest).not.toHaveBeenCalled();
+	});
+
+	it('skips a media-only post when Exclude Empty Text is configured', async () => {
+		const emptyPost = card({ id: '100' }) as unknown[];
+		(emptyPost[3] as Record<string, unknown>).children = tracked(
+			'feed-full-update',
+			tracked('feed-update-image', element({ src: 'https://media.example.com/image.png' })),
+		);
+		const ctx = context([1], false, { excludeEmptyText: true });
+		ctx.helpers.httpRequest.mockResolvedValue(
+			response(fixture([emptyPost, card({ id: '101' })], null)),
+		);
+		const [items] = await new LinkedInFeed().execute.call(ctx as unknown as IExecuteFunctions);
+		expect(items.map((item) => item.json.urn)).toEqual(['urn:li:activity:101']);
+		expect(items[0].pairedItem).toEqual({ item: 0 });
 	});
 
 	it('applies the configured company filter before reaching Limit', async () => {

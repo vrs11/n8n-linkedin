@@ -4,8 +4,11 @@ import { DEFAULT_OPTIONS, resolveOptions } from '../nodes/LinkedInFeed/lib/types
 describe('execution options', () => {
 	it('uses defaults and preserves explicit false and zero settings', () => {
 		expect(resolveOptions(5, {})).toEqual({ ...DEFAULT_OPTIONS, limit: 5 });
-		expect(resolveOptions(5, { excludeCompanies: false, maxRetries: 0 })).toMatchObject({
+		expect(
+			resolveOptions(5, { excludeCompanies: false, excludeEmptyText: false, maxRetries: 0 }),
+		).toMatchObject({
 			excludeCompanies: false,
+			excludeEmptyText: false,
 			maxRetries: 0,
 		});
 	});
@@ -31,6 +34,9 @@ describe('execution options', () => {
 		[{ maxRetries: 11 }, 'Maximum Retries'],
 		[{ excludeCompanies: 'false' }, 'Exclude Companies'],
 		[{ excludeCompanies: null }, 'Exclude Companies'],
+		[{ excludeEmptyText: 'false' }, 'Exclude Empty Text'],
+		[{ excludeEmptyText: null }, 'Exclude Empty Text'],
+		[{ excludeEmptyText: 0 }, 'Exclude Empty Text'],
 	] as const)('validates advanced settings (%j)', (options, message) => {
 		expect(() => resolveOptions(5, options)).toThrow(message);
 	});

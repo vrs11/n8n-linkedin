@@ -215,6 +215,7 @@ export async function collectPosts(
 		const result = await client.page(payload);
 		assertActive();
 		for (const post of result.posts) {
+			if (options.excludeEmptyText && !post.text.trim()) continue;
 			// Use the parsed author link, never company mentions or follower counts in post text.
 			if (options.excludeCompanies && authorType(post.author.url) !== 'person') continue;
 			const identity = post.urn || post.url;
